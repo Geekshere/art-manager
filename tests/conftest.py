@@ -11,6 +11,11 @@ PNG_1PX = base64.b64decode(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==')
 JPEG_BYTES = b'\xff\xd8\xff\xe0' + b'\x00' * 64 + b'\xff\xd9'
 
+def png_as_jpeg():
+    """What the app writes/embeds for PNG_1PX: everything is converted to JPEG."""
+    from art_manager.artwork import to_jpeg
+    return to_jpeg(PNG_1PX, 'image/png')
+
 _TEMPLATE_FLAC = None
 
 def _template_flac(tmp_path_factory):

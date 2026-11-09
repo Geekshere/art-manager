@@ -13,10 +13,11 @@ It only ever touches artwork — never tags, genres or filenames.
   embedded in the tracks side by side, per disc
 - Pick art from search results, a pasted URL, an uploaded file, the art already
   embedded in the tracks, or the existing `cover.jpg`
-- Saves `cover.jpg` / `artist.jpg` and embeds the picture into every track,
-  with a live progress bar
+- Saves `cover.jpg` in the album folder **and in every disc folder** (CD 1,
+  CD 2, …), saves `artist.jpg`, and embeds the same picture into every track,
+  with a live progress bar. PNG/WebP artwork is converted to JPEG
 - **Start wizard** walks only the artists without `artist.jpg` and the albums
-  without a cover, then returns to the artist list
+  that are missing a `cover.jpg` anywhere, then returns to the artist list
 - Fast incremental rescans: **Update Library** only re-reads folders that
   changed (**↺ Full rescan** re-reads everything)
 - Missing-artwork report and an ignore list (`!Playlists`, NAS junk such as
@@ -72,6 +73,13 @@ Music/
       CD 2/
         ...
 ```
+
+An album counts as done only when **`cover.jpg`** (any capitalisation) is in
+the album folder and, for a multi-disc album, in every disc folder that holds
+tracks. Art that is only embedded in the tracks doesn't count, and neither do
+other file names such as `folder.jpg` or `cover.png` — they are shown as the
+current cover, and **Keep current cover** turns them into `cover.jpg`
+everywhere. The Missing report lists which folders are still missing one.
 
 ## Network libraries
 

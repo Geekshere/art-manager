@@ -260,7 +260,7 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
                 <button id="alb-use-emb-btn" class="hidden" onclick="doEmbed('embedded')">Use embedded as cover &amp; re-embed</button>
             </div>
             <hr class="sep">
-            <button id="alb-keep-btn" class="hidden" onclick="doEmbed('cover_file')">Keep current cover — embed all tracks</button>
+            <button id="alb-keep-btn" class="hidden" onclick="doEmbed('cover_file')">Keep current cover — save as cover.jpg everywhere &amp; embed</button>
         </div>
 
         <!-- MIDDLE -->
@@ -863,7 +863,7 @@ async function loadAlbumStep(ai,ali){
     const keepBtn=document.getElementById('alb-keep-btn');
     const covInfo=document.getElementById('alb-cover-info');
 
-    if(album.has_cover&&album.cover_path){
+    if(album.cover_path){
         covImg.src='/api/image/local?path='+enc(album.cover_path)+'&t='+Date.now();
         covImg.dataset.full=covImg.src;
         covImg.style.display='block'; covNone.style.display='none';
@@ -879,7 +879,7 @@ async function loadAlbumStep(ai,ali){
         covInfo.textContent=''; keepBtn.classList.add('hidden');
     }
 
-    renderDiscInfo(album,false);
+    renderDiscInfo(album);
 
     const embStatus=document.getElementById('alb-emb-status');
     const embThumb=document.getElementById('alb-emb-thumb');
@@ -914,14 +914,20 @@ async function loadAlbumStep(ai,ali){
     searchAlbumArt(0);
 }
 
-function renderDiscInfo(album,allCovered){
+// Which folders still need a cover.jpg: the album folder, plus every disc folder of a multi-disc album.
+function coverFolders(album){
+    const rows=[{label:'Album folder',ok:!!album.cover_in_root}];
+    if(album.is_multi_disc) album.disc_info.forEach(d=>rows.push({label:d.name||'disc',ok:!!d.has_cover}));
+    return rows;
+}
+function missingCoverFolders(album){
+    return coverFolders(album).filter(r=>!r.ok).map(r=>r.label);
+}
+function renderDiscInfo(album){
     const el=document.getElementById('alb-disc-covers');
-    if(!album.is_multi_disc){ el.innerHTML=''; return; }
-    el.innerHTML=album.disc_info.map(d=>{
-        const ok=allCovered||d.has_cover;
-        const note=allCovered&&!d.has_cover?' <span class="note">(album root)</span>':'';
-        return '<div class="disc-info-row">'+(ok?'<span class="ok">✓</span>':'<span class="err">✗</span>')+'<span>'+esc(d.name||'disc')+'</span>'+note+'</div>';
-    }).join('');
+    el.innerHTML='<div class="note" style="margin:4px 0 2px">cover.jpg in:</div>'+coverFolders(album).map(r=>
+        '<div class="disc-info-row">'+(r.ok?'<span class="ok">✓</span>':'<span class="err">✗</span>')+'<span>'+esc(r.label)+'</span></div>'
+    ).join('');
 }
 
 // ── Artist image search — paginated, sorted ──────────────────────────────────
@@ -1048,7 +1054,14 @@ async function doEmbed(source,imageUrl){
 
     try{
         const d=await api('/api/prepare-embed',{method:'POST',body:JSON.stringify(body)});
-        if(d.cover_path){ album.cover_path=d.cover_path; album.cover_in_root=true; }
+        // cover.jpg now exists in the album folder and every disc folder
+        album.cover_path=d.cover_path; album.cover_in_root=true;
+        album.disc_info.forEach(x=>{ x.has_cover=true; });
+        (d.disc_covers||[]).forEach(dc=>{
+            const disc=album.disc_info.find(x=>x.path===dc.path);
+            if(disc) disc.cover_path=dc.cover_path;
+        });
+        if(!album.is_multi_disc && album.disc_info[0]) album.disc_info[0].cover_path=d.cover_path;
         if(gen===stepGen){
             document.getElementById('alb-prog-thumb').src=d.data_url;
             setEl('alb-prog-lbl','embedding '+d.total_tracks+' tracks...');
@@ -1096,7 +1109,7 @@ function onEmbedDone(errors,al,gen){
         document.getElementById('alb-cover-none').style.display='none';
         document.getElementById('alb-keep-btn').classList.remove('hidden');
     }
-    renderDiscInfo(al,true);
+    renderDiscInfo(al);
     const skip=document.getElementById('alb-skip-btn');
     skip.textContent='Done →'; skip.className='done-btn';
 
@@ -1161,7 +1174,11 @@ function showMissing(){
     if(!lib){ document.getElementById('missing-body').innerHTML='<p class="note">No library loaded yet.</p>'; return; }
     const noImg=lib.artists.filter(a=>!a.has_img).map(a=>a.name);
     const noCover=[];
-    lib.artists.forEach(a=>a.albums.forEach(al=>{ if(!al.has_cover) noCover.push(a.name+' — '+al.name); }));
+    lib.artists.forEach(a=>a.albums.forEach(al=>{
+        if(al.has_cover) return;
+        const miss=missingCoverFolders(al);
+        noCover.push(a.name+' — '+al.name+(al.is_multi_disc&&miss.length?'  (missing in: '+miss.join(', ')+')':''));
+    }));
     let html='';
     html+='<div class="miss-section"><h3>Artists without artist.jpg ('+noImg.length+')</h3>';
     if(!noImg.length) html+='<p class="ok note">All artists have an image.</p>';

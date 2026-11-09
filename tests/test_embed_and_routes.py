@@ -2,7 +2,7 @@ import base64, json
 import pytest
 from mutagen.flac import FLAC
 from art_manager import artwork, server
-from conftest import PNG_1PX, JPEG_BYTES
+from conftest import PNG_1PX, JPEG_BYTES, png_as_jpeg
 
 def _scan(client, root):
     return client.get('/api/scan', query_string={'root': str(root)}).json
@@ -30,7 +30,7 @@ def test_embed_every_source(client, make_library, monkeypatch, source):
     lib = _scan(client, root)
     al = _album(lib, '100% Orange Juice', 'Multi')
     body = {'album_path': al['path'], 'disc_info': al['disc_info'], 'source': source}
-    expected = PNG_1PX
+    expected = png_as_jpeg()   # PNG sources are converted: everything is stored as JPEG
     if source == 'upload':
         body['image_data'] = 'data:image/png;base64,' + base64.b64encode(PNG_1PX).decode()
     elif source == 'embedded':

@@ -222,13 +222,17 @@ the URL.
 
 ## Open questions for the owner
 
-1. Should albums whose art is **only embedded** (no `cover.jpg`) appear in the
-   wizard? Currently yes — the wizard follows what the scan lists as missing.
-2. Multiple libraries / storage roots? The storage layer would allow it; not scoped.
+1. Multiple libraries / storage roots? The storage layer would allow it; not scoped.
+
+## Decided by the owner
+
+- Albums whose art is only embedded stay in the wizard.
+- Every album folder **and every disc folder** (CD 1, CD 2, …) must contain a
+  `cover.jpg`; only that name counts. Embeds write it everywhere, as JPEG.
 
 ## Ideas (not scheduled)
 
 - A keyed web-image provider (e.g. Brave Search API) for people who want
   something sturdier than the unofficial DuckDuckGo/Bing endpoints.
-- Resize/convert huge downloaded images before embedding (optional max size).
+- Resize huge downloaded images before embedding (optional max size; conversion to JPEG is already done).
 - Serve with a production WSGI server in the Docker image instead of Flask's.

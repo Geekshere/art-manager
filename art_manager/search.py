@@ -11,7 +11,7 @@ import requests
 
 from .config import cfg
 
-_MB_UA = 'ArtManager/0.2 (+https://github.com/Geekshere/art-manager)'
+_MB_UA = 'ArtManager/0.3 (+https://github.com/Geekshere/art-manager)'
 
 # ── Size helpers ──────────────────────────────────────────────────────────────
 

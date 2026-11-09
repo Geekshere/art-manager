@@ -56,11 +56,22 @@ tests/                     pytest; tests/ui/ui_tests.js is driven by tests/test_
                          disc_info: [{ name, path, flac_count, has_cover, cover_path }] }] }] }
 ```
 
-The cached copy on disk also has per-artist `fp` and `tree` (fingerprints, see
-below); `scan.client_view()` strips them before sending. `has_cover` /
-`has_img` mean a cover/artist **file exists**; art only embedded in the FLACs
-does not count. `dirty: true` = this artist's scan hit an error; it is never
-trusted from cache next time.
+The cached copy on disk also has `version` (`scan.SCHEMA_VERSION`) and
+per-artist `fp` and `tree` (fingerprints, see below); `scan.client_view()`
+strips the latter before sending. A cache with another `version` is neither
+served by `/api/library` nor used for an incremental scan (bump the version
+whenever the meaning of a cached field changes). `dirty: true` = this artist's
+scan hit an error; it is never trusted from cache next time.
+
+**The cover rule (owner's requirement):** an album is done (`has_cover`) only if
+`cover.jpg` (case-insensitive) exists in the album folder (`cover_in_root`) AND,
+for multi-disc albums, in every disc folder (`disc_info[].has_cover`). Embedded
+art and other names (`folder.jpg`, `cover.png`, …) don't count; `cover_path` is
+just the best image to *show*. The wizard, artist-list counts and Missing
+report all follow `has_cover`, so embedded-only albums stay in the wizard (the
+owner wants that). Every embed writes the same JPEG (`artwork.to_jpeg`) as
+`cover.jpg` into the album folder and every disc folder (`write_covers`,
+reusing an existing `Cover.JPG`-style name) and embeds it into every track.
 
 ### Storage layer
 
@@ -116,7 +127,8 @@ responses have empty `cover_image`).
 
 ### Embed flow
 
-`POST /api/prepare-embed` writes `cover.jpg` and creates a job →
+`POST /api/prepare-embed` converts the image to JPEG, writes `cover.jpg` into
+the album folder and every disc folder, and creates a job →
 `GET /api/embed/<job_id>` streams per-track progress over SSE (a job runs
 once) → `artwork.embed_into()` per FLAC. Sources: `url`, `cover_file`,
 `embedded`, `upload` (browser `data:` URL, JPEG/PNG only).

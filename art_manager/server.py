@@ -5,9 +5,10 @@ from flask import Flask, Response, jsonify, render_template, request
 
 from . import __version__, config, storage
 from .artwork import (collect_album_flacs, decode_uploaded_image, dl_image, embed_into,
-                      find_album_embedded, read_flac, to_data_url, write_artist_img, write_cover)
+                      find_album_embedded, read_flac, to_data_url, to_jpeg, write_artist_img,
+                      write_covers)
 from .config import cfg, is_ignored, load_cfg, parse_patterns, public_cfg, save_cfg
-from .scan import apply_ignore, client_view, list_dir, scan_library
+from .scan import SCHEMA_VERSION, apply_ignore, client_view, list_dir, scan_library
 from .search import run_providers
 
 app = Flask(__name__)
@@ -164,8 +165,12 @@ def api_test_connection():
 @app.route('/api/library')
 def api_library():
     # Filtered on the way out so an ignore-list change applies immediately,
-    # even to a cache written before the folder was ignored.
-    return jsonify(client_view(apply_ignore(_library())))
+    # even to a cache written before the folder was ignored. A cache from an
+    # older version is not served: the client then rescans automatically.
+    lib = _library()
+    if lib and lib.get('version') != SCHEMA_VERSION:
+        return jsonify({})
+    return jsonify(client_view(apply_ignore(lib)))
 
 @app.route('/api/scan')
 def api_scan():
@@ -180,7 +185,8 @@ def api_scan():
         return jsonify({'error': storage.error_message(e, root)}), 502
 
     prev = _library()
-    if not (prev and prev.get('root') == root) or request.args.get('full') == '1':
+    if (not (prev and prev.get('root') == root) or prev.get('version') != SCHEMA_VERSION
+            or request.args.get('full') == '1'):
         prev = None   # full rescan: re-read every folder, ignore the cache
 
     errors = []
@@ -189,7 +195,8 @@ def api_scan():
     except Exception as e:
         return jsonify({'error': storage.error_message(e, root)}), 502
     errors.sort(key=lambda e: e['path'])
-    _cached_lib = {'root': root, 'artists': artists, 'scanned_at': time.time(), 'errors': errors}
+    _cached_lib = {'root': root, 'artists': artists, 'scanned_at': time.time(), 'errors': errors,
+                   'version': SCHEMA_VERSION}
     _save_lib_cache(_cached_lib)
     return jsonify(client_view(_cached_lib))
 
@@ -336,25 +343,27 @@ def api_prepare_embed():
                 return jsonify({'error': 'Cover file not found'}), 400
             img = storage.read_bytes(cover)
             mime = 'image/png' if cover.lower().endswith('.png') else 'image/jpeg'
-            saved_cover = cover
         elif source == 'embedded':
             img, mime = find_album_embedded(album_path, disc_info)
             if not img:
                 return jsonify({'error': 'No embedded art found'}), 400
-            saved_cover = write_cover(album_path, img, mime)
         elif source == 'upload':
             img, mime = decode_uploaded_image(d.get('image_data'))
-            saved_cover = write_cover(album_path, img, mime)
         else:
             img, mime = dl_image(d['image_url'])
-            saved_cover = write_cover(album_path, img, mime)
+
+        # One JPEG for everything: cover.jpg in the album folder and in every
+        # disc folder, and the same picture embedded in every track.
+        img, mime = to_jpeg(img, mime), 'image/jpeg'
+        saved_cover, disc_covers = write_covers(album_path, disc_info, img)
 
         all_flacs = collect_album_flacs(disc_info or [{'path': album_path}])
         job_id = str(uuid.uuid4())
         with _jobs_lock:
             _jobs[job_id] = {'flacs': all_flacs, 'img': img, 'mime': mime}
         return jsonify({'success': True, 'embed_id': job_id, 'data_url': to_data_url(img, mime),
-                        'cover_path': saved_cover, 'total_tracks': len(all_flacs)})
+                        'cover_path': saved_cover, 'disc_covers': disc_covers,
+                        'total_tracks': len(all_flacs)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

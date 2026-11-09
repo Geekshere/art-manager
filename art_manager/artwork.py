@@ -1,5 +1,5 @@
 """Reading/writing artwork: cover.jpg, artist.jpg, and pictures embedded in FLACs."""
-import base64
+import base64, io
 
 import requests
 from mutagen.flac import FLAC, Picture
@@ -74,17 +74,55 @@ def find_album_embedded(album_path, disc_info):
     return None, None
 
 
-def _write_image(dir_path, stem, data, mime):
-    ext = 'png' if 'png' in mime else 'jpg'
-    p = storage.join(dir_path, f'{stem}.{ext}')
-    storage.write_bytes(p, data)
+def to_jpeg(data, mime):
+    """
+    The image as JPEG bytes. JPEGs are passed through untouched (no
+    recompression); PNG/WebP/etc. are converted at quality 95, with any
+    transparency flattened onto white.
+    """
+    if mime == 'image/jpeg' and data[:3] == b'\xff\xd8\xff':
+        return data
+    from PIL import Image
+    try:
+        im = Image.open(io.BytesIO(data))
+        im.load()
+    except Exception as e:
+        raise ValueError(f'Not a readable image ({mime}): {e}')
+    if im.mode in ('RGBA', 'LA') or (im.mode == 'P' and 'transparency' in im.info):
+        im = im.convert('RGBA')
+        flat = Image.new('RGB', im.size, (255, 255, 255))
+        flat.paste(im, mask=im.getchannel('A'))
+        im = flat
+    else:
+        im = im.convert('RGB')
+    out = io.BytesIO()
+    im.save(out, 'JPEG', quality=95, optimize=True)
+    return out.getvalue()
+
+
+def write_cover(dir_path, jpeg):
+    """Write cover.jpg into one folder, reusing an existing Cover.JPG-style name if there is one."""
+    from .scan import COVER_JPG, find_cover_jpg
+    files, _ = list_dir(dir_path)
+    p = find_cover_jpg(dir_path, files) or storage.join(dir_path, COVER_JPG)
+    storage.write_bytes(p, jpeg)
     return p
 
-def write_cover(album_path, data, mime):
-    return _write_image(album_path, 'cover', data, mime)
+def write_covers(album_path, disc_info, jpeg):
+    """
+    cover.jpg in the album folder and in every disc folder.
+    -> (album cover path, [{'path': disc folder, 'cover_path': its cover.jpg}])
+    """
+    root = write_cover(album_path, jpeg)
+    discs = [{'path': d['path'], 'cover_path': write_cover(d['path'], jpeg)}
+             for d in disc_info if d.get('path') and d['path'] != album_path]
+    return root, discs
 
 def write_artist_img(artist_path, data, mime):
-    return _write_image(artist_path, 'artist', data, mime)
+    ext = 'png' if 'png' in mime else 'jpg'
+    p = storage.join(artist_path, f'artist.{ext}')
+    storage.write_bytes(p, data)
+    return p
 
 
 def embed_into(flac_path, data, mime):

@@ -1,5 +1,6 @@
 flask>=2.3
 mutagen>=1.47
+pillow>=10          # converts PNG/WebP artwork to cover.jpg
 requests>=2.31
 smbprotocol>=1.13
 ddgs>=9.0          # web image search (DuckDuckGo/Bing, unofficial endpoints)

@@ -12,8 +12,8 @@ def artist(lib, name):
 def album(lib, a, al):
     return next(x for x in artist(lib, a)['albums'] if x['name'] == al)
 
-def do_scan(client, root):
-    r = client.get('/api/scan', query_string={'root': str(root)})
+def do_scan(client, root, full=False):
+    r = client.get('/api/scan', query_string={'root': str(root), **({'full': '1'} if full else {})})
     assert r.status_code == 200, r.json
     return r.json
 
@@ -37,6 +37,9 @@ def test_full_scan_shapes(client, make_library):
     m = album(lib, '100% Orange Juice', 'Multi')
     assert m['is_multi_disc'] and m['total_tracks'] == 2
     assert [d['has_cover'] for d in m['disc_info']] == [True, False]
+    # CD 1 has cover.jpg, but the album folder and CD 2 don't -> not done
+    assert m['has_cover'] is False and m['cover_in_root'] is False
+    assert m['cover_path'].endswith('cover.jpg')   # CD 1's cover is still shown
 
 def test_incremental_detects_every_kind_of_change(client, make_library, flac_bytes):
     root = make_library()
@@ -92,6 +95,52 @@ def test_full_rescan_ignores_cache(client, make_library, fake):
     r = client.get('/api/scan', query_string={'root': froot, 'full': '1'})
     assert r.status_code == 200
     assert len(fake.calls) == ndirs(root)   # every folder re-read, like a cold scan
+
+# ── cover.jpg rule: album folder AND every disc folder ─────────────────────────
+
+def test_multidisc_needs_cover_jpg_in_every_folder(client, make_library):
+    root = make_library()
+    m = root / '100% Orange Juice' / 'Multi'
+    (m / 'cover.jpg').write_bytes(JPEG_BYTES)                 # album folder: yes; CD 2: still no
+    assert album(do_scan(client, root), '100% Orange Juice', 'Multi')['has_cover'] is False
+    (m / 'CD 2' / 'cover.jpg').write_bytes(JPEG_BYTES)
+    al = album(do_scan(client, root, full=True), '100% Orange Juice', 'Multi')
+    assert al['has_cover'] is True and al['cover_in_root'] is True
+
+def test_other_cover_names_shown_but_not_done(client, make_library):
+    root = make_library()
+    (root / 'Alpha' / 'Second' / 'folder.jpg').write_bytes(JPEG_BYTES)
+    al = album(do_scan(client, root), 'Alpha', 'Second')
+    assert al['has_cover'] is False and al['cover_path'].endswith('folder.jpg')
+
+def test_cover_jpg_any_case_counts_and_is_overwritten_in_place(client, make_library):
+    root = make_library()
+    d = root / 'Alpha' / 'Second'
+    (d / 'Cover.JPG').write_bytes(JPEG_BYTES)
+    al = album(do_scan(client, root), 'Alpha', 'Second')
+    assert al['has_cover'] is True
+    r = client.post('/api/prepare-embed', json={'album_path': al['path'], 'disc_info': al['disc_info'],
+                                                'source': 'embedded'})
+    assert r.status_code == 200
+    assert sorted(p.name for p in d.iterdir() if p.suffix.lower() in ('.jpg', '.png')) == ['Cover.JPG']
+
+def test_old_cache_version_forces_full_rescan(client, make_library, fake):
+    import json
+    from art_manager import config
+    root = make_library()
+    froot = 'fake://' + str(root)
+    do_scan(client, froot)
+    with open(config.CACHE_FILE) as f:
+        cache = json.load(f)
+    cache['version'] = 1
+    with open(config.CACHE_FILE, 'w') as f:
+        json.dump(cache, f)
+    from art_manager import server
+    server._cached_lib = None
+    assert client.get('/api/library').json == {}   # outdated cache is not served
+    fake.calls.clear()
+    do_scan(client, froot)
+    assert len(fake.calls) == ndirs(root)          # and the next scan is a full one
 
 # ── Reliability (ROADMAP 2) ───────────────────────────────────────────────────
 

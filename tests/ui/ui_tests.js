@@ -159,14 +159,28 @@ const gridLabels = (page, id) => page.$$eval(`#${id} .img-cell img`, els => els.
   {
     const page = await newPage();
     await mockSearch(page, {});
+    // Missing report says which folders still lack cover.jpg
+    await page.goto(BASE + '/');
+    await page.waitForSelector('#v-artists:not(.hidden)');
+    await page.click('text=Missing Report');
+    const report = await page.textContent('#missing-body');
+    check(report.includes('100% Orange Juice — Multi  (missing in: Album folder, CD 2)'),
+          'missing report lists the folders without cover.jpg');
+    check(report.includes('Alpha — Second'), 'embedded-only album is listed as missing');
     await page.goto(BASE + '/' + encodeURIComponent('100% Orange Juice') + '/Multi/');
     await page.waitForSelector('#step-album:not(.hidden)');
+    const rows = async () => page.$$eval('#alb-disc-covers .disc-info-row', rs => rs.map(r => r.textContent));
+    const before = await rows();
+    check(JSON.stringify(before) === JSON.stringify(['✗Album folder', '✓CD 1', '✗CD 2']),
+          `per-folder cover.jpg status before: ${JSON.stringify(before)}`);
     await page.setInputFiles('#alb-upload-input', process.argv[3]);
     await page.waitForSelector('#alb-done:not(.hidden)', { timeout: 10000 }).catch(() => {});
     const txt = await page.textContent('#alb-done-txt');
     check(await page.isVisible('#alb-done') && txt.includes('Embedded into all 2 tracks'),
           `result banner shown after embedding: ${JSON.stringify(txt)}`);
     check(await page.textContent('#alb-skip-btn') === 'Done →', 'Skip button turns into Done →');
+    const after = await rows();
+    check(after.length === 3 && after.every(r => r.startsWith('✓')), `every folder has cover.jpg after embedding: ${JSON.stringify(after)}`);
     await page.close();
   }
 

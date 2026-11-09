@@ -11,7 +11,7 @@ import pytest
 from mutagen.flac import FLAC
 
 from art_manager import storage
-from conftest import add_flac, build_library, JPEG_BYTES, PNG_1PX
+from conftest import add_flac, build_library, JPEG_BYTES, PNG_1PX, png_as_jpeg
 
 USER, PASSWORD = getpass.getuser(), 'Test-pw-123'
 
@@ -179,17 +179,26 @@ def test_embed_through_backend(client, backend):
     job = _embed(client, al, source='upload',
                  image_data='data:image/png;base64,' + __import__('base64').b64encode(PNG_1PX).decode())
     assert job['total_tracks'] == 2
+    jpeg = png_as_jpeg()
     disk = root / '100% Orange Juice' / 'Multi'
     for f in (disk / 'CD 1' / '01.flac', disk / 'CD 2' / '01.flac'):
-        assert [p.data for p in FLAC(str(f)).pictures] == [PNG_1PX]   # verified on disk, not via the backend
-    assert (disk / 'cover.png').read_bytes() == PNG_1PX
+        pics = FLAC(str(f)).pictures                 # verified on disk, not via the backend
+        assert [(p.mime, p.data) for p in pics] == [('image/jpeg', jpeg)]
+    # cover.jpg in the album folder AND in every disc folder; no stray PNG
+    for d in (disk, disk / 'CD 1', disk / 'CD 2'):
+        assert (d / 'cover.jpg').read_bytes() == jpeg, d
+    assert not list(disk.rglob('cover.png'))
+    lib = _scan(client, url)
+    m = _album(lib, '100% Orange Juice', 'Multi')
+    assert m['has_cover'] and m['cover_in_root'] and all(x['has_cover'] for x in m['disc_info'])
     assert not [p for p in disk.rglob('.artmgr-tmp-*')], 'temporary upload left behind'
     # read back through the backend: the embedded art and the new cover
     first = f"{url}/100% Orange Juice/Multi/CD 1/01.flac"
     r = client.get('/api/track-art', query_string={'file': first})
-    assert r.status_code == 200 and r.data == PNG_1PX
+    assert r.status_code == 200 and r.data == jpeg
     r = client.get('/api/image/local', query_string={'path': job['cover_path']})
-    assert r.status_code == 200 and r.data == PNG_1PX
+    assert r.status_code == 200 and r.data == jpeg
+    assert sorted(x['path'] for x in job['disc_covers']) == sorted(x['path'] for x in al['disc_info'])
 
 def test_embedded_and_cover_file_sources(client, backend):
     root, url = backend
@@ -199,7 +208,7 @@ def test_embedded_and_cover_file_sources(client, backend):
                    'disc_info': __import__('json').dumps(second['disc_info'])})
     assert r.json['has_art'] is True
     _embed(client, second, source='embedded')
-    assert (root / 'Alpha' / 'Second' / 'cover.png').read_bytes() == PNG_1PX
+    assert (root / 'Alpha' / 'Second' / 'cover.jpg').read_bytes() == png_as_jpeg()
     first = _album(lib, 'Alpha', 'First')                # has cover.jpg
     _embed(client, first, source='cover_file', cover_path=first['cover_path'])
     for f in (root / 'Alpha' / 'First').glob('*.flac'):
