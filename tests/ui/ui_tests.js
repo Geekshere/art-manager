@@ -212,6 +212,31 @@ const gridLabels = (page, id) => page.$$eval(`#${id} .img-cell img`, els => els.
     await page.close();
   }
 
+  // ── 7. Setup screen: Change library… → Browse… → Save & scan ────────────
+  {
+    const page = await newPage();
+    await mockSearch(page, {});
+    await page.goto(BASE + '/');
+    await page.waitForSelector('#v-artists:not(.hidden)');
+    const root = (await (await page.request.get(BASE + '/api/config')).json()).library_root;
+    const parent = root.replace(/[\\/]Music$/, '');
+    await page.click('#hdr button:has-text("Settings")');
+    await page.click('text=Change library…');
+    check(await page.inputValue('#su-path') === root, 'setup screen is prefilled with the current library');
+    await page.fill('#su-path', parent);
+    await page.click('#su-local button:has-text("Browse")');
+    await page.waitForSelector('.fb-item:has-text("Music")');
+    await page.click('.fb-item:has-text("Music")');
+    await page.waitForSelector('.fb-item:has-text("Alpha")');
+    await page.click('#fb-use');
+    check(await page.inputValue('#su-path') === root, 'folder browser fills in the chosen folder');
+    await page.click('text=Save & scan library');
+    await page.waitForSelector('#v-artists:not(.hidden)', { timeout: 10000 });
+    const n = await page.$$eval('#artist-list-body tr', r => r.length);
+    check(n === 4, `library scanned after setup (${n} artists)`);
+    await page.close();
+  }
+
   check(errors.length === 0, 'no page errors ' + JSON.stringify(errors));
   await browser.close();
   console.log(failures ? `${failures} FAILED` : 'ALL PASSED');

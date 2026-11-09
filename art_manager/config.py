@@ -1,5 +1,5 @@
 """Settings: defaults, config.json load/save/migration, env overrides, ignore list."""
-import fnmatch, json, os, re
+import base64, fnmatch, hashlib, hmac, json, os, re, sys
 from urllib.parse import urlsplit, unquote
 
 def _default_data_dir():
@@ -13,8 +13,12 @@ def _default_data_dir():
     if os.environ.get('ARTMGR_DATA_DIR'):
         return os.environ['ARTMGR_DATA_DIR']
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if os.path.exists(os.path.join(repo, 'app.py')):
+    if not getattr(sys, 'frozen', False) and os.path.exists(os.path.join(repo, 'app.py')):
         return repo
+    if sys.platform == 'darwin':
+        d = os.path.expanduser('~/Library/Application Support/Art Manager')
+        os.makedirs(d, exist_ok=True)
+        return d
     base = os.environ.get('APPDATA') if os.name == 'nt' else \
         (os.environ.get('XDG_CONFIG_HOME') or os.path.expanduser('~/.config'))
     d = os.path.join(base or os.path.expanduser('~'), 'art-manager')
@@ -32,6 +36,10 @@ DEFAULTS = {
     'storage_username': '', 'storage_password': '', 'smb_port': 445,
     'fanart_key': '', 'discogs_token': '', 'web_search': True,
     'ignored_folders': None,   # None = DEFAULT_IGNORED; stored once edited
+    # How the app is reached (take effect on the next start; CLI flags override)
+    'allow_network': False,    # False = this computer only (127.0.0.1)
+    'port': 5000,
+    'app_password_hash': '',   # PBKDF2 hash of the optional app password; never the password itself
 }
 cfg = dict(DEFAULTS)   # the one live settings dict; mutate it, never rebind it
 
@@ -44,7 +52,7 @@ DEFAULT_IGNORED = ['.[!.]*', '@eaDir', '#recycle', '@Recycle', '$RECYCLE.BIN',
 
 # Never sent to the browser: GET /api/config replaces them with has_<key>
 # flags; POST only overwrites one when a non-empty value is sent.
-SECRET_KEYS = ('storage_password', 'fanart_key', 'discogs_token')
+SECRET_KEYS = ('storage_password', 'fanart_key', 'discogs_token', 'app_password_hash')
 
 # Environment variables override config.json and are never written to it.
 ENV_OVERRIDES = {
@@ -132,6 +140,26 @@ def public_cfg():
     for k in SECRET_KEYS:
         out['has_' + k] = bool(cfg.get(k))
     return out
+
+
+# ── App password ──────────────────────────────────────────────────────────────
+
+_PBKDF2_ITERATIONS = 200_000
+
+def hash_password(pw):
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac('sha256', pw.encode(), salt, _PBKDF2_ITERATIONS)
+    return 'pbkdf2_sha256${}${}${}'.format(_PBKDF2_ITERATIONS, base64.b64encode(salt).decode(),
+                                            base64.b64encode(dk).decode())
+
+def verify_password(pw, stored):
+    try:
+        algo, iters, salt, dk = stored.split('$')
+        assert algo == 'pbkdf2_sha256'
+        got = hashlib.pbkdf2_hmac('sha256', pw.encode(), base64.b64decode(salt), int(iters))
+        return hmac.compare_digest(got, base64.b64decode(dk))
+    except Exception:
+        return False
 
 
 # ── Ignore list ───────────────────────────────────────────────────────────────

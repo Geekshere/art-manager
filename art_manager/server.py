@@ -1,5 +1,6 @@
 """Flask app: HTTP API, embed jobs (SSE), access control and the CLI entry point."""
-import argparse, concurrent.futures, hmac, json, os, posixpath, threading, time, uuid
+import argparse, concurrent.futures, hashlib, hmac, json, os, posixpath, socket, string, sys
+import threading, time, uuid, webbrowser
 
 from flask import Flask, Response, jsonify, render_template, request
 
@@ -70,7 +71,28 @@ def _check_paths(*paths):
 
 # ── Access control ────────────────────────────────────────────────────────────
 
-_auth = {'password': None, 'loopback_only': False}   # set at startup from CLI flags
+# Set at startup. 'password' is a plain password from --password/ARTMGR_PASSWORD
+# (overrides the saved one); otherwise cfg['app_password_hash'] is used.
+_auth = {'password': None, 'loopback_only': False}
+_running = {'host': None, 'port': None}
+_verified = set()   # sha256 of passwords already checked against the slow PBKDF2 hash
+
+def _password_ok(pw):
+    if _auth['password']:
+        return hmac.compare_digest(pw.encode(), _auth['password'].encode())
+    stored = cfg.get('app_password_hash')
+    if not stored:
+        return True
+    key = hashlib.sha256((stored + '\0' + pw).encode()).hexdigest()
+    if key in _verified:
+        return True
+    if config.verify_password(pw, stored):
+        _verified.add(key)
+        return True
+    return False
+
+def _password_required():
+    return bool(_auth['password'] or cfg.get('app_password_hash'))
 _LOOPBACK_HOSTNAMES = {'localhost', '127.0.0.1', '[::1]'}
 
 def _is_loopback(host):
@@ -86,11 +108,10 @@ def _require_password():
         hostname = host.split(']')[0] + ']' if host.startswith('[') else host.rsplit(':', 1)[0]
         if hostname.lower() not in _LOOPBACK_HOSTNAMES:
             return Response('Forbidden host', 403)
-    pw = _auth['password']
-    if not pw:
+    if not _password_required():
         return None
     a = request.authorization
-    if a and a.password is not None and hmac.compare_digest(a.password.encode(), pw.encode()):
+    if a and a.password is not None and _password_ok(a.password):
         return None
     return Response('Password required', 401, {'WWW-Authenticate': 'Basic realm="Art Manager"'})
 
@@ -129,7 +150,21 @@ def api_config():
             if k in d: cfg[k] = (d[k] or '').strip()
         if 'web_search' in d:
             cfg['web_search'] = bool(d['web_search'])
+        if d.get('clear_app_password'):
+            cfg['app_password_hash'] = ''
+        elif d.get('app_password'):
+            cfg['app_password_hash'] = config.hash_password(d['app_password'])
+        _verified.clear()
+        if 'allow_network' in d:
+            cfg['allow_network'] = bool(d['allow_network'])
+        if 'port' in d:
+            try:
+                p = int(d['port'])
+                if 1 <= p <= 65535: cfg['port'] = p
+            except (TypeError, ValueError): pass
         for k in config.SECRET_KEYS:
+            if k == 'app_password_hash':
+                continue   # only ever set from app_password above
             # Empty = keep the stored value; an explicit clear_<key> removes it.
             if d.get('clear_' + k):
                 cfg[k] = ''
@@ -143,7 +178,50 @@ def api_config():
         if any(cfg.get(k) != before[k] for k in conn_fields):
             storage.reset_all()   # connection settings changed: drop cached sessions
         save_cfg()
-    return jsonify(public_cfg())
+    return jsonify(_public())
+
+def _public():
+    out = public_cfg()
+    out['running'] = {'network': not _auth['loopback_only'], 'port': _running['port'],
+                      'password_from_cli': bool(_auth['password'])}
+    return out
+
+@app.route('/api/browse')
+def api_browse():
+    """
+    Folder picker for the setup screen. No path: starting points (home folder,
+    drives / volumes). Otherwise the subfolders of that folder, on any backend
+    (using the saved credentials).
+    """
+    path = request.args.get('path', '').strip()
+    if not path:
+        places = [{'name': 'Home folder', 'path': os.path.expanduser('~')}]
+        if os.name == 'nt':
+            places += [{'name': f'{d}:\\', 'path': f'{d}:\\'} for d in string.ascii_uppercase
+                       if os.path.exists(f'{d}:\\')]
+        else:
+            for base in ('/Volumes', '/mnt', '/media', f'/media/{os.environ.get("USER", "")}', '/run/media'):
+                if os.path.isdir(base):
+                    places += [{'name': os.path.join(base, n), 'path': os.path.join(base, n)}
+                               for n in sorted(os.listdir(base))
+                               if os.path.isdir(os.path.join(base, n)) and not n.startswith('.')]
+            places.append({'name': '/', 'path': '/'})
+        return jsonify({'path': '', 'parent': None, 'dirs': places, 'places': True})
+    try:
+        entries = storage.scandir(path)
+    except Exception as e:
+        return jsonify({'path': path, 'error': storage.error_message(e, path)}), 200
+    dirs = sorted((e.name for e in entries if e.is_dir and not e.name.startswith('.')), key=str.lower)
+    parent = storage.dirname(path)
+    if storage.kind(path) == 'local':
+        parent = os.path.dirname(os.path.normpath(path))
+        if os.path.normpath(parent) == os.path.normpath(path):
+            parent = ''   # filesystem root -> back to the starting points
+    elif parent.count('/') < 3:   # smb://host or webdav://host: nothing above the share
+        parent = None
+    return jsonify({'path': path, 'parent': parent,
+                    'dirs': [{'name': n, 'path': storage.join(path, n)} for n in dirs],
+                    'flacs': sum(1 for e in entries if not e.is_dir and e.name.lower().endswith('.flac'))})
 
 @app.route('/api/test-connection')
 def api_test_connection():
@@ -394,47 +472,96 @@ def api_embed(job_id):
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
-def main(argv=None):
+def _free_port(host, start):
+    """The first port from `start` on that we can listen on (macOS uses 5000 for AirPlay)."""
+    for port in range(start, start + 50):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((host, port))
+                return port
+            except OSError:
+                continue
+    return start
+
+def _lan_ip():
+    """This computer's address on the local network (no packets are sent)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(('192.0.2.1', 9))   # TEST-NET address: only picks the outgoing interface
+            return s.getsockname()[0]
+    except OSError:
+        return '<this computer\'s IP>'
+
+def prepare(argv=None):
+    """Parse the command line, remember what was given, work out host/port. -> (host, port, wanted, open_browser)"""
     load_cfg()
+    frozen = getattr(sys, 'frozen', False)   # the standalone app (PyInstaller)
     parser = argparse.ArgumentParser(prog='art-manager', description='Art Manager — artwork for a FLAC library')
     parser.add_argument('library', nargs='?',
-                        help='Local path, smb://host/share/path, or webdav(s)://host/path')
-    parser.add_argument('--port', type=int, default=int(os.environ.get('ARTMGR_PORT', 5000)))
-    parser.add_argument('--host', default=os.environ.get('ARTMGR_HOST', '127.0.0.1'),
-                        help='Interface to listen on (default 127.0.0.1 = this machine only). '
-                             'Use 0.0.0.0 to allow other devices on your network.')
-    parser.add_argument('--password', default=os.environ.get('ARTMGR_PASSWORD'),
-                        help='Require this password (HTTP basic auth, any username). '
-                             'Also read from ARTMGR_PASSWORD. Recommended with --host.')
-    parser.add_argument('--fanart', help='Fanart.tv API key')
-    parser.add_argument('--user', '--smb-user', dest='user', help='Username for SMB/WebDAV')
-    parser.add_argument('--pass', '--smb-pass', dest='pw',
-                        help='Password for SMB/WebDAV (prefer ARTMGR_STORAGE_PASSWORD: '
-                             'command-line arguments are visible to other users)')
+                        help='Local path, smb://host/share/path, or webdav(s)://host/path (saved)')
+    parser.add_argument('--port', type=int, default=None,
+                        help='Port (default: from Settings, 5000; the next free one is used if taken)')
+    parser.add_argument('--host', default=None,
+                        help='Interface to listen on, e.g. 0.0.0.0 (default: from Settings — '
+                             'this computer only unless "Allow other devices" is on)')
+    parser.add_argument('--password', default=None,
+                        help='Require this password for this run (also ARTMGR_PASSWORD). '
+                             'To save one, use Settings.')
+    parser.add_argument('--fanart', help='Fanart.tv API key (saved)')
+    parser.add_argument('--user', '--smb-user', dest='user', help='Username for SMB/WebDAV (saved)')
+    parser.add_argument('--pass', '--smb-pass', dest='pw', help='Password for SMB/WebDAV (saved)')
+    parser.add_argument('--open', dest='open_browser', action='store_true', default=None,
+                        help='Open the browser on start (default for the standalone app)')
+    parser.add_argument('--no-browser', dest='open_browser', action='store_false',
+                        help="Don't open the browser")
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     args = parser.parse_args(argv)
 
-    if args.library: cfg['library_root'] = args.library
-    if args.fanart:  cfg['fanart_key'] = args.fanart
-    if args.user:    cfg['storage_username'] = args.user
-    if args.pw:      cfg['storage_password'] = args.pw
+    # Anything given on the command line is remembered, so it only has to be given once.
+    given = {'library_root': args.library, 'fanart_key': args.fanart,
+             'storage_username': args.user, 'storage_password': args.pw}
+    given = {k: v for k, v in given.items() if v}
+    if given:
+        cfg.update(given)
+        save_cfg()
 
-    _auth['password'] = args.password or None
-    _auth['loopback_only'] = _is_loopback(args.host)
-    shown = 'localhost' if _is_loopback(args.host) else args.host
+    host = args.host or os.environ.get('ARTMGR_HOST') or \
+        ('0.0.0.0' if cfg.get('allow_network') else '127.0.0.1')
+    wanted = args.port or int(os.environ.get('ARTMGR_PORT') or 0) or int(cfg.get('port') or 5000)
+    port = _free_port(host, wanted)
+
+    _auth['password'] = args.password or os.environ.get('ARTMGR_PASSWORD') or None
+    _auth['loopback_only'] = _is_loopback(host)
+    _running.update(host=host, port=port)
+    open_browser = args.open_browser if args.open_browser is not None else frozen
+    return host, port, wanted, open_browser
+
+
+def main(argv=None):
+    host, port, wanted, open_browser = prepare(argv)
+    frozen = getattr(sys, 'frozen', False)
+    url = f"http://localhost:{port}"
     root = cfg['library_root'] or ''
-    print(f"\nArt Manager {__version__}  →  http://{shown}:{args.port}")
-    print(f"  Library : {root or '(not set)'}" + (f"  [{storage.kind(root)}]" if root else ''))
-    if storage.kind(root) != 'local':
+    print(f"\nArt Manager {__version__}  →  {url}")
+    if port != wanted:
+        print(f"  (port {wanted} is in use, using {port})")
+    print(f"  Library : {root or '(not set — choose one in the browser)'}" + (f"  [{storage.kind(root)}]" if root else ''))
+    if root and storage.kind(root) != 'local':
         print(f"  User    : {cfg.get('storage_username') or '(none)'}")
-    print(f"  Config  : {config.CFG_FILE}")
-    if not _is_loopback(args.host):
-        print()
-        print("  WARNING : listening on", args.host, "— other devices on your network can reach this app")
-        print("            and modify your library." + ("" if args.password else
-              " No --password set: ANYONE who can reach this port has full access."))
+    print(f"  Settings: {config.CFG_FILE}")
+    if not _is_loopback(host):
+        lan_ip = _lan_ip()
+        print(f"  Network : other devices can open http://{lan_ip}:{port}")
+        if not _password_required():
+            print("  WARNING : no app password set — ANYONE on your network can change your library.")
+            print("            Set one in Settings → Access.")
+    if frozen:
+        print("\n  Close this window to stop Art Manager.")
     print()
-    app.run(host=args.host, port=args.port, debug=False, threaded=True)
+
+    if open_browser:
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    app.run(host=host, port=port, debug=False, threaded=True)
 
 
 if __name__ == '__main__':

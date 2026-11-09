@@ -247,3 +247,11 @@ def test_bad_credentials_reported(client, backend):
     r = client.get('/api/test-connection', query_string={'root': url}).json
     assert r['ok'] is False
     assert 'denied' in r['msg'].lower() or 'authentication' in r['msg'].lower(), r['msg']
+
+def test_folder_browser_through_backend(client, backend):
+    root, url = backend
+    d = client.get('/api/browse', query_string={'path': url}).json
+    assert 'error' not in d, d
+    assert [x['name'] for x in d['dirs']] == ['!!!', '!Playlists', '100% Orange Juice', 'Alpha']
+    sub = client.get('/api/browse', query_string={'path': d['dirs'][-1]['path']}).json
+    assert {x['name'] for x in sub['dirs']} == {'First', 'Second', 'Album #1'}

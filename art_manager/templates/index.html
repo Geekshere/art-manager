@@ -117,6 +117,25 @@ h3 { font-size:12px; font-weight:700; color:#555; text-transform:uppercase; lett
 .spinner { display:inline-block; width:12px; height:12px; border:2px solid #ddd; border-top-color:#555; border-radius:50%; animation:spin .7s linear infinite; vertical-align:middle; }
 @keyframes spin { to { transform:rotate(360deg); } }
 .hidden { display:none !important; }
+
+/* Setup screen */
+.src-tiles { display:flex; gap:10px; flex-wrap:wrap; margin:12px 0 16px; }
+.tile { display:flex; flex-direction:column; align-items:flex-start; gap:3px; width:220px; padding:12px 14px; text-align:left; background:#fff; border:2px solid #ccc; border-radius:6px; }
+.tile b { font-size:13px; } .tile span { font-size:11px; color:#666; line-height:1.35; }
+.tile:hover { background:#f7f7f7; border-color:#888; }
+.tile.on { border-color:#111; background:#f3f3f3; }
+.su-panel { max-width:720px; }
+.su-panel .cfg-row label { min-width:150px; }
+.su-actions { display:flex; gap:8px; align-items:center; margin:14px 0 6px 158px; }
+
+/* Folder browser */
+.modal { position:fixed; inset:0; background:rgba(0,0,0,.35); display:flex; align-items:center; justify-content:center; z-index:10000; }
+.modal-box { background:#fff; border-radius:6px; padding:16px; width:min(560px,94vw); max-height:84vh; display:flex; flex-direction:column; gap:8px; box-shadow:0 8px 30px rgba(0,0,0,.25); }
+#fb-path { font-family:ui-monospace,monospace; font-size:11px; word-break:break-all; }
+#fb-list { overflow:auto; border:1px solid #ddd; min-height:200px; max-height:50vh; }
+.fb-item { padding:6px 10px; border-bottom:1px solid #f0f0f0; cursor:pointer; font-size:12px; }
+.fb-item:hover { background:#f3f3f3; }
+.modal-actions { display:flex; gap:8px; justify-content:flex-end; }
 select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; background:#fff; border-radius:2px; }
 </style>
 </head>
@@ -146,14 +165,56 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
 
 <!-- SETUP -->
 <div id="v-setup" class="page">
-    <h2>Library Path</h2>
-    <p style="margin-bottom:10px;color:#555;font-size:12px">Root directory containing your artist folders.</p>
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-        <input type="text" id="inp-root" style="width:400px" placeholder="Z:\Music" onkeydown="if(event.key==='Enter')doScan(false)">
-        <button class="primary" onclick="doScan(false)">Scan Library</button>
+    <h2>Where is your music?</h2>
+    <p class="note">Choose where your artist folders are. Everything you enter here is saved — you only do this once.</p>
+    <div class="src-tiles">
+        <button class="tile" data-kind="local" onclick="setupKind('local')"><b>This computer</b><span>A folder on this computer, a USB drive, or a drive that is already mapped/mounted</span></button>
+        <button class="tile" data-kind="smb" onclick="setupKind('smb')"><b>Network share (SMB)</b><span>A NAS (Synology, QNAP, Unraid…) or a shared Windows folder</span></button>
+        <button class="tile" data-kind="webdav" onclick="setupKind('webdav')"><b>WebDAV</b><span>Nextcloud, ownCloud, or a NAS WebDAV server</span></button>
     </div>
-    <p id="setup-err" class="err" style="font-size:12px"></p>
-    <p class="note" style="margin-top:8px">Or at launch: <code>python app.py "Z:\Music"</code></p>
+
+    <div id="su-local" class="su-panel">
+        <div class="cfg-row"><label>Music folder</label><input type="text" id="su-path" placeholder="e.g. D:\Music or /home/me/Music" onkeydown="if(event.key==='Enter')setupSave()"><button onclick="openBrowser()">Browse…</button></div>
+    </div>
+    <div id="su-smb" class="su-panel hidden">
+        <div class="cfg-row"><label>Server</label><input type="text" id="su-smb-host" placeholder="nas.local or 192.168.1.20"></div>
+        <div class="cfg-row"><label>Share and folder</label><input type="text" id="su-smb-path" placeholder="e.g. Media/Music  (the share name first)"><button onclick="openBrowser()">Browse…</button></div>
+        <div class="cfg-row"><label>Username</label><input type="text" id="su-smb-user" autocomplete="off" placeholder="your NAS / Windows user"></div>
+        <div class="cfg-row"><label>Password</label><input type="password" id="su-smb-pass" autocomplete="new-password" placeholder="password"></div>
+        <div class="cfg-row"><label>Port</label><input type="text" id="su-smb-port" style="width:70px" placeholder="445"><span class="note">leave as is unless your NAS uses another port</span></div>
+        <p class="note" style="margin-left:158px">Tip: you can also paste a path like <code>\\nas\Media\Music</code> into <b>Server</b>.</p>
+    </div>
+    <div id="su-webdav" class="su-panel hidden">
+        <div class="cfg-row"><label>WebDAV address</label><input type="text" id="su-dav-url" placeholder="https://cloud.example.com/remote.php/dav/files/USERNAME/Music"><button onclick="openBrowser()">Browse…</button></div>
+        <p class="note" style="margin:-4px 0 8px 158px">Nextcloud: Files → ⚙ <b>Files settings</b> (bottom left) shows your WebDAV address; add your music folder to the end.</p>
+        <div class="cfg-row"><label>Username</label><input type="text" id="su-dav-user" autocomplete="off"></div>
+        <div class="cfg-row"><label>Password</label><input type="password" id="su-dav-pass" autocomplete="new-password" placeholder="password or app password"></div>
+    </div>
+
+    <div class="su-actions">
+        <button onclick="setupTest()">Test connection</button>
+        <button class="primary" onclick="setupSave()">Save &amp; scan library</button>
+        <button id="su-cancel" class="hidden" onclick="goBack()">Cancel</button>
+    </div>
+    <p id="setup-err" style="font-size:12px;margin-left:158px"></p>
+    <input type="hidden" id="inp-root">
+</div>
+
+<!-- FOLDER BROWSER -->
+<div id="fb-modal" class="modal hidden" onclick="if(event.target===this)closeBrowser()">
+    <div class="modal-box">
+        <h3 style="margin:0">Choose your music folder</h3>
+        <div class="note">Open the folder that contains your <b>artist</b> folders, then click <b>Use this folder</b>.</div>
+        <div id="fb-path"></div>
+        <div id="fb-list"></div>
+        <div id="fb-hint" class="note"></div>
+        <div class="modal-actions">
+            <button id="fb-up" onclick="fbUp()">↑ Up</button>
+            <span style="flex:1"></span>
+            <button onclick="closeBrowser()">Cancel</button>
+            <button class="primary" id="fb-use" onclick="fbChoose()">Use this folder</button>
+        </div>
+    </div>
 </div>
 
 <!-- WIZARD BAR -->
@@ -317,6 +378,7 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
         <h2 style="margin:0">Settings</h2>
         <button onclick="goBack()">← Back</button>
     </div>
+    <div class="cfg-row"><label></label><button class="primary" onclick="openSetup()">Change library…</button><span class="note">guided setup with a folder browser</span></div>
     <div class="cfg-row"><label>Library root</label><input type="text" id="cfg-root" placeholder="/path/to/Music, smb://nas.local/Media/Music or webdavs://host/path" oninput="toggleConnFields()"><button onclick="saveCfg()">Save</button><button id="conn-test-btn" onclick="testConnection()">Test connection</button></div>
     <p class="note" style="max-width:600px;margin:-4px 0 8px 138px">
         A local folder (<code>Z:\Music</code>, <code>/mnt/music</code>), or a network location read directly — no drive mapping needed:
@@ -330,8 +392,9 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
         <div class="cfg-row"><label></label><button onclick="saveCfg()">Save</button></div>
         <p class="note" style="max-width:600px;margin:0 0 8px 138px">Saved passwords and keys are never shown again — leave the field blank to keep the saved one. They are stored in config.json (readable only by your user), or can be supplied via the ARTMGR_STORAGE_PASSWORD / ARTMGR_FANART_KEY / ARTMGR_DISCOGS_TOKEN environment variables instead.</p>
     </div>
-    <div class="cfg-row"><label>Fanart.tv key</label><input type="password" id="cfg-ft" placeholder="free key at fanart.tv" autocomplete="new-password"><button onclick="saveCfg()">Save</button><button id="cfg-ft-clear" class="hidden" onclick="clearSecret('fanart_key')">Clear</button></div>
-    <div class="cfg-row"><label>Discogs token</label><input type="password" id="cfg-dc" placeholder="free personal token (discogs.com → Settings → Developers)" autocomplete="new-password"><button onclick="saveCfg()">Save</button><button id="cfg-dc-clear" class="hidden" onclick="clearSecret('discogs_token')">Clear</button></div>
+    <div class="cfg-row"><label>Fanart.tv key</label><input type="password" id="cfg-ft" placeholder="free key at fanart.tv" autocomplete="new-password"><button onclick="saveCfg()">Save</button><button id="cfg-ft-clear" class="hidden" onclick="clearSecret('fanart_key')">Clear</button><a href="https://fanart.tv/get-an-api-key/" target="_blank" rel="noopener">get a free key</a></div>
+    <div class="cfg-row"><label>Discogs token</label><input type="password" id="cfg-dc" placeholder="free personal token (discogs.com → Settings → Developers)" autocomplete="new-password"><button onclick="saveCfg()">Save</button><button id="cfg-dc-clear" class="hidden" onclick="clearSecret('discogs_token')">Clear</button><a href="https://www.discogs.com/settings/developers" target="_blank" rel="noopener">get a free token</a></div>
+    <p class="note" style="max-width:600px;margin:-4px 0 8px 138px">Optional extras. iTunes, Deezer, Cover Art Archive, Wikipedia and web search work without any account or key.</p>
     <div class="cfg-row"><label>Web image search</label><label style="min-width:0;display:flex;gap:6px;align-items:center;color:#333"><input type="checkbox" id="cfg-web" onchange="saveCfg()"> include DuckDuckGo + Bing image results (unofficial, best effort)</label></div>
     <div class="cfg-row" style="align-items:flex-start">
         <label>Ignored folders</label>
@@ -342,6 +405,13 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
         </div>
     </div>
     <p class="note" style="max-width:600px;margin:-4px 0 8px 138px">Folder names skipped at every level (artists, albums, discs). Case-insensitive; <code>*</code> and <code>?</code> wildcards allowed. Takes effect immediately; folders removed from this list reappear after <strong>Update Library</strong>.</p>
+    <hr class="sep">
+    <h3>Access</h3>
+    <div class="cfg-row"><label>Other devices</label><label style="min-width:0;display:flex;gap:6px;align-items:center;color:#333"><input type="checkbox" id="cfg-net"> allow phones and other computers on my network to open Art Manager</label></div>
+    <div class="cfg-row"><label>Port</label><input type="text" id="cfg-port" style="width:70px" placeholder="5000"></div>
+    <div class="cfg-row"><label>App password</label><input type="password" id="cfg-apppw" autocomplete="new-password" placeholder="none"><button id="cfg-apppw-clear" class="hidden" onclick="clearSecret('app_password')">Remove</button></div>
+    <div class="cfg-row"><label></label><button onclick="saveCfg()">Save</button></div>
+    <p id="access-note" class="note" style="max-width:600px;margin:0 0 8px 138px"></p>
     <p id="cfg-status" class="note" style="margin-top:6px;max-width:600px"></p>
     <hr class="sep">
     <h3>Image sources</h3>
@@ -511,7 +581,11 @@ function collectCfgBody(){
         storage_username:document.getElementById('cfg-user').value.trim(),
         smb_port:document.getElementById('cfg-smb-port').value.trim()||445,
         ignored_folders:document.getElementById('cfg-ignored').value.split('\n').map(x=>x.trim()).filter(Boolean),
+        allow_network:document.getElementById('cfg-net').checked,
+        port:document.getElementById('cfg-port').value.trim()||5000,
     };
+    const ap=document.getElementById('cfg-apppw').value;
+    if(ap) body.app_password=ap;
     const ft=document.getElementById('cfg-ft').value.trim();
     const pw=document.getElementById('cfg-pass').value;
     if(ft) body.fanart_key=ft;
@@ -524,12 +598,26 @@ function showSecretState(c){
     // Never put a stored secret back into the form — just say one is saved.
     [['cfg-pass','cfg-pass-clear',c.has_storage_password,'password'],
      ['cfg-ft','cfg-ft-clear',c.has_fanart_key,'free key at fanart.tv'],
-     ['cfg-dc','cfg-dc-clear',c.has_discogs_token,'free personal token (discogs.com → Settings → Developers)']].forEach(([inp,clr,has,ph])=>{
+     ['cfg-dc','cfg-dc-clear',c.has_discogs_token,'free personal token (discogs.com → Settings → Developers)'],
+     ['cfg-apppw','cfg-apppw-clear',c.has_app_password_hash,'none — anyone who can open the page can use it']].forEach(([inp,clr,has,ph])=>{
         const el=document.getElementById(inp);
         el.value='';
         el.placeholder=has?'••••••  saved (type to replace)':ph;
         document.getElementById(clr).classList.toggle('hidden',!has);
     });
+}
+function showAccessState(c){
+    document.getElementById('cfg-net').checked=!!c.allow_network;
+    document.getElementById('cfg-port').value=c.port||5000;
+    const r=c.running||{};
+    const notes=[];
+    if(r.network!==undefined && (r.network!==!!c.allow_network || (r.port && +r.port!==+(c.port||5000))))
+        notes.push('<span class="warn">Restart Art Manager for the network/port change to take effect.</span>');
+    if(c.allow_network && !c.has_app_password_hash && !r.password_from_cli)
+        notes.push('<span class="warn">Set an app password: with other devices allowed, anyone on your network could change your library.</span>');
+    if(r.password_from_cli) notes.push('A password given with --password / ARTMGR_PASSWORD is in effect for this run.');
+    notes.push('The browser asks for the app password once (any username).');
+    document.getElementById('access-note').innerHTML=notes.join('<br>');
 }
 function resetIgnored(){
     document.getElementById('cfg-ignored').value=(clientCfg.default_ignored_folders||[]).join('\n');
@@ -537,8 +625,7 @@ function resetIgnored(){
 }
 async function clearSecret(key){
     try{
-        const c=await api('/api/config',{method:'POST',body:JSON.stringify({['clear_'+key]:true})});
-        clientCfg=c; showSecretState(c);
+        fillCfgForm(await api('/api/config',{method:'POST',body:JSON.stringify({['clear_'+key]:true})}));
     }catch(e){
         const s=document.getElementById('cfg-status'); s.textContent='Error: '+e.message; s.className='err';
     }
@@ -558,27 +645,30 @@ function toggleConnFields(){
     setEl('cfg-user-lbl',label+' username'); setEl('cfg-pass-lbl',label+' password');
     setEl('conn-kind',{local:'→ local folder',smb:'→ SMB share',webdav:'→ WebDAV'}[kind]);
 }
+// Put the saved settings into the Settings form (after loading, and whenever
+// something else — e.g. the setup screen — has saved), so a later Save there
+// never writes stale values back.
+function fillCfgForm(c){
+    clientCfg=c;
+    document.getElementById('cfg-root').value=c.library_root||'';
+    document.getElementById('cfg-web').checked=c.web_search!==false;
+    document.getElementById('cfg-user').value=c.storage_username||'';
+    document.getElementById('cfg-smb-port').value=c.smb_port||445;
+    document.getElementById('cfg-ignored').value=(c.ignored_folders||[]).join('\n');
+    showSecretState(c); showAccessState(c);
+    toggleConnFields();
+    if(c.library_root) document.getElementById('inp-root').value=c.library_root;
+    computeStale();
+}
 async function loadCfg(){
-    try{
-        const c=await api('/api/config');
-        clientCfg=c;
-        document.getElementById('cfg-root').value=c.library_root||'';
-        document.getElementById('cfg-web').checked=c.web_search!==false;
-        document.getElementById('cfg-user').value=c.storage_username||'';
-        document.getElementById('cfg-smb-port').value=c.smb_port||445;
-        document.getElementById('cfg-ignored').value=(c.ignored_folders||[]).join('\n');
-        showSecretState(c);
-        toggleConnFields();
-        if(c.library_root) document.getElementById('inp-root').value=c.library_root;
-        computeStale();
-    }catch(_){}
+    try{ fillCfgForm(await api('/api/config')); }catch(_){}
 }
 async function saveCfg(){
     const body=collectCfgBody();
     try{
         const c=await api('/api/config',{method:'POST',body:JSON.stringify(body)});
         clientCfg=c;
-        showSecretState(c);
+        showSecretState(c); showAccessState(c);
         document.getElementById('cfg-ignored').value=(c.ignored_folders||[]).join('\n');
         document.getElementById('inp-root').value=body.library_root;
         if(lib){
@@ -611,6 +701,134 @@ async function testConnection(){
     }finally{
         btn.disabled=false;
     }
+}
+
+// ── Setup screen ──────────────────────────────────────────────────────────
+let setupKindSel='local';
+function setupKind(k){
+    setupKindSel=k;
+    document.querySelectorAll('.tile').forEach(t=>t.classList.toggle('on',t.dataset.kind===k));
+    ['local','smb','webdav'].forEach(x=>document.getElementById('su-'+x).classList.toggle('hidden',x!==k));
+    setEl('setup-err','');
+}
+function val(id){ return document.getElementById(id).value.trim(); }
+function setVal(id,v){ document.getElementById(id).value=v||''; }
+
+// Accepts "nas.local", "\\\\nas\\Media\\Music", "smb://nas/Media/Music" in the Server box.
+function smbParts(){
+    let host=val('su-smb-host'), path=val('su-smb-path');
+    let m=/^(?:smb:\/\/|\\\\|\/\/)([^\\\/]+)[\\\/]*(.*)$/i.exec(host);
+    if(m){ host=m[1]; if(m[2]) path=m[2]+(path?'/'+path:''); }
+    return {host, path:path.replace(/\\/g,'/').replace(/^\/+|\/+$/g,'')};
+}
+function setupRoot(){
+    if(setupKindSel==='local') return val('su-path');
+    if(setupKindSel==='smb'){
+        const p=smbParts();
+        return p.host?'smb://'+p.host+(p.path?'/'+p.path:''):'';
+    }
+    let u=val('su-dav-url');
+    if(u && !/^[a-z]+:\/\//i.test(u)) u='https://'+u;
+    return u.replace(/\/+$/,'');
+}
+function setupBody(){
+    const b={library_root:setupRoot()};
+    if(setupKindSel==='smb'){
+        b.storage_username=val('su-smb-user'); b.smb_port=val('su-smb-port')||445;
+        const pw=document.getElementById('su-smb-pass').value; if(pw) b.storage_password=pw;
+    }else if(setupKindSel==='webdav'){
+        b.storage_username=val('su-dav-user');
+        const pw=document.getElementById('su-dav-pass').value; if(pw) b.storage_password=pw;
+    }
+    return b;
+}
+async function setupApply(){
+    const b=setupBody();
+    if(!b.library_root) throw new Error(setupKindSel==='local'?'Choose your music folder first.':
+        setupKindSel==='smb'?'Enter the server and the share name.':'Enter the WebDAV address.');
+    fillCfgForm(await api('/api/config',{method:'POST',body:JSON.stringify(b)}));
+    return b.library_root;
+}
+function setupMsg(t,cls){ const e=document.getElementById('setup-err'); e.textContent=t; e.className=cls||'note'; }
+async function setupTest(){
+    try{
+        const root=await setupApply();
+        setupMsg('Testing…');
+        const d=await api('/api/test-connection?root='+enc(root));
+        setupMsg((d.ok?'✓ ':'✗ ')+d.msg, d.ok?'ok':'err');
+        return d.ok;
+    }catch(e){ setupMsg('✗ '+e.message,'err'); return false; }
+}
+async function setupSave(){
+    if(!await setupTest()) return;
+    await doScan(true);
+}
+function prefillSetup(c){
+    const root=c.library_root||'', kind=storageKind(root);
+    setupKind(kind);
+    if(kind==='local') setVal('su-path',root);
+    else if(kind==='smb'){
+        const m=/^smb:\/\/([^\/]+)\/?(.*)$/i.exec(root)||[];
+        setVal('su-smb-host',m[1]); setVal('su-smb-path',m[2]);
+        setVal('su-smb-user',c.storage_username); setVal('su-smb-port',c.smb_port&&c.smb_port!=445?c.smb_port:'');
+    }else{ setVal('su-dav-url',root); setVal('su-dav-user',c.storage_username); }
+    const ph=c.has_storage_password?'••••••  saved (type to replace)':'password';
+    document.getElementById('su-smb-pass').placeholder=ph;
+    document.getElementById('su-dav-pass').placeholder=c.has_storage_password?ph:'password or app password';
+}
+function openSetup(){
+    prefillSetup(clientCfg);
+    document.getElementById('su-cancel').classList.toggle('hidden',!lib);
+    showV('v-setup');
+}
+
+// ── Folder browser ────────────────────────────────────────────────────────
+let fbCur=null, fbParent=null;
+async function openBrowser(){
+    let start='';
+    if(setupKindSel!=='local'){
+        // Remote: save what was typed (so the browser can log in), start at the share / address.
+        try{ start=await setupApply(); }catch(e){ setupMsg('✗ '+e.message,'err'); return; }
+    }else start=val('su-path');
+    document.getElementById('fb-modal').classList.remove('hidden');
+    fbLoad(start);
+}
+function closeBrowser(){ document.getElementById('fb-modal').classList.add('hidden'); }
+async function fbLoad(path){
+    const list=document.getElementById('fb-list');
+    list.innerHTML='<div class="fb-item note"><span class="spinner"></span> loading…</div>';
+    setEl('fb-path',path||'');
+    let d;
+    try{ d=await api('/api/browse?path='+enc(path||'')); }
+    catch(e){ d={path, error:e.message}; }
+    if(d.error){
+        list.innerHTML='<div class="fb-item err">'+esc(d.error)+'</div>';
+        fbCur=null; fbParent=path?'':null;
+    }else{
+        fbCur=d.places?null:d.path; fbParent=d.parent;
+        list.innerHTML='';
+        if(!d.dirs.length) list.innerHTML='<div class="fb-item note">(no folders here)</div>';
+        d.dirs.forEach(x=>{
+            const it=document.createElement('div'); it.className='fb-item';
+            it.textContent='📁 '+x.name; it.title=x.path;
+            it.addEventListener('click',()=>fbLoad(x.path));
+            list.appendChild(it);
+        });
+    }
+    document.getElementById('fb-up').disabled=(fbParent===null||fbParent===undefined);
+    document.getElementById('fb-use').disabled=!fbCur;
+    setEl('fb-hint', fbCur ? (d.dirs.length+' folder'+(d.dirs.length===1?'':'s')+' here'+
+        (d.flacs?' · '+d.flacs+' FLAC files — this looks like an album, choose the folder above your artists':'')) : '');
+}
+function fbUp(){ if(fbParent!==null&&fbParent!==undefined) fbLoad(fbParent); }
+function fbChoose(){
+    if(!fbCur) return;
+    if(setupKindSel==='local') setVal('su-path',fbCur);
+    else if(setupKindSel==='smb'){
+        const m=/^smb:\/\/[^\/]+\/?(.*)$/i.exec(fbCur); setVal('su-smb-path',m?m[1]:'');
+    }else setVal('su-dav-url',fbCur);
+    closeBrowser();
+    setupMsg('Folder chosen — click “Save & scan library”.');
 }
 
 // ── Scan ──────────────────────────────────────────────────────────────────
@@ -1278,7 +1496,7 @@ function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
     }catch(_){}
     // No cache — auto-scan if path is configured
     const root=document.getElementById('inp-root').value.trim();
-    if(root) await doScan(false); else showV('v-setup');
+    if(root) await doScan(false); else openSetup();
 })();
 </script>
 </body>
