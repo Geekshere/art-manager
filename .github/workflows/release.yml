@@ -1,0 +1,76 @@
+name: Release apps
+
+# Builds the standalone apps (no Python needed) on every version tag and
+# attaches them to a GitHub Release. Can also be run by hand from the Actions
+# tab to just build and test them.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, name: windows-x64, file: art-manager-windows-x64.exe }
+          - { os: macos-latest,   name: macos-arm64, file: art-manager-macos-arm64 }
+          - { os: ubuntu-22.04,   name: linux-x64,   file: art-manager-linux-x64 }   # older glibc = runs on more distros
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependencies
+        run: pip install -r requirements.txt pyinstaller
+      - name: Build
+        run: pyinstaller --noconfirm packaging/art-manager.spec
+      - name: Rename
+        run: |
+          src=dist/art-manager; [ -f dist/art-manager.exe ] && src=dist/art-manager.exe
+          mkdir -p out && cp "$src" "out/${{ matrix.file }}" && ls -la out
+      - name: Smoke test (starts, serves the page, scans a folder)
+        run: |
+          mkdir -p "smoke/music/Some Artist/Some Album" smoke/data && touch "smoke/music/Some Artist/Some Album/01.flac"
+          ./out/${{ matrix.file }} --version
+          ARTMGR_DATA_DIR=smoke/data ./out/${{ matrix.file }} smoke/music --port 5077 --no-browser > smoke/server.log 2>&1 &
+          for i in $(seq 1 90); do curl -sf localhost:5077/ > /dev/null && break; sleep 1; done
+          cat smoke/server.log
+          curl -sf localhost:5077/ | grep -q "<title>Art Manager"
+          curl -sf localhost:5077/api/scan | grep -q '"name":"Some Artist"'
+      - name: Zip (macOS keeps the executable bit)
+        if: runner.os == 'macOS'
+        run: cd out && zip ${{ matrix.file }}.zip ${{ matrix.file }} && rm ${{ matrix.file }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: out/*
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la assets
+          gh release create "$GITHUB_REF_NAME" assets/* \
+            --title "Art Manager ${GITHUB_REF_NAME#v}" \
+            --notes-file packaging/RELEASE_NOTES.md

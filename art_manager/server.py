@@ -533,11 +533,18 @@ def prepare(argv=None):
     _auth['password'] = args.password or os.environ.get('ARTMGR_PASSWORD') or None
     _auth['loopback_only'] = _is_loopback(host)
     _running.update(host=host, port=port)
+    if os.environ.get('ARTMGR_DEBUG'):
+        import logging
+        logging.basicConfig(level=logging.DEBUG if os.environ['ARTMGR_DEBUG'] == '2' else logging.INFO, format='%(asctime)s %(name)s: %(message)s')
     open_browser = args.open_browser if args.open_browser is not None else frozen
     return host, port, wanted, open_browser
 
 
 def main(argv=None):
+    # A Windows console or a redirected log may not handle "→" etc.: never crash on it.
+    for stream in (sys.stdout, sys.stderr):
+        try: stream.reconfigure(errors='replace')
+        except Exception: pass
     host, port, wanted, open_browser = prepare(argv)
     frozen = getattr(sys, 'frozen', False)
     url = f"http://localhost:{port}"

@@ -25,7 +25,19 @@ pytest -q
 ```
 
 Always use a venv (target platforms include distros with PEP 668 locked-down
-system Python). `pip install .` installs the `art-manager` command instead.
+system Python). Users don't need any of this: they download the standalone app
+from GitHub Releases, or `uv tool install git+https://github.com/Geekshere/art-manager`.
+
+## Releases (standalone apps)
+
+`packaging/art-manager.spec` (PyInstaller, one file, console window) bundles
+Python and every dependency. `.github/workflows/release.yml` builds it on
+Windows, macOS (arm64) and Linux (ubuntu-22.04 for an older glibc), smoke-tests
+each binary, and on a `v*` tag publishes a GitHub Release with
+`packaging/RELEASE_NOTES.md`. To release: bump `art_manager/__init__.py`,
+commit, `git tag vX.Y.Z && git push origin vX.Y.Z`. The frozen app
+(`sys.frozen`) opens the browser on start and stores settings in the per-user
+config dir. Local build: `pyinstaller packaging/art-manager.spec`.
 
 ## Layout
 
@@ -39,6 +51,7 @@ art_manager/
   search.py                image sources + Provider registry + run_providers()
   server.py                Flask routes, path confinement, auth, embed jobs (SSE), CLI main()
   templates/index.html     the whole frontend: one SPA, vanilla JS, no build step
+packaging/                 PyInstaller spec + release notes for the standalone apps
 tests/                     pytest; tests/ui/ui_tests.js is driven by tests/test_ui.py
 ```
 
@@ -133,6 +146,18 @@ the album folder and every disc folder, and creates a job →
 once) → `artwork.embed_into()` per FLAC. Sources: `url`, `cover_file`,
 `embedded`, `upload` (browser `data:` URL, JPEG/PNG only).
 
+### Setup screen, saved settings
+
+First run (no `library_root`) and **Settings → Change library…** show the
+setup screen (`#v-setup`): local / SMB / WebDAV tiles, plain fields that are
+turned into the root URL client-side (`setupRoot()`), and a folder browser
+backed by `/api/browse` (local starting points with no path; any backend
+otherwise). Whatever is passed on the command line is saved (`prepare()`).
+Access settings (`allow_network`, `port`, `app_password_hash` — PBKDF2, only
+settable via `app_password`) apply on the next start; `--host/--port/--password`
+override for one run. Busy port → next free one. After anything saves config,
+call `fillCfgForm()` so the Settings form never writes stale values back.
+
 ### Server safety
 
 Binds 127.0.0.1 by default; when loopback-only, requests with a non-loopback
@@ -179,7 +204,13 @@ reintroduce a server-side "re-check" pass.
     `LocalStorage` stats folders directly there. SMB servers running on Windows
     may show the same staleness in directory listings — **↺ Full rescan**
     (`/api/scan?full=1`) is the escape hatch.
-11. **smbd in tests:** on shutdown it SIGTERMs its whole process group. Start it
+11. **Never print non-ASCII without a safety net on Windows.** A redirected
+    stdout uses the legacy code page; `main()` reconfigures stdout/stderr with
+    `errors='replace'` so "→" can't crash startup.
+12. **Bing/DuckDuckGo can return junk instead of failing** (degraded results for
+    busy IPs). The relevance filter drops it; `ARTMGR_DEBUG=1` logs raw counts
+    per engine, `=2` also the first raw result.
+13. **smbd in tests:** on shutdown it SIGTERMs its whole process group. Start it
     with `start_new_session=True` **and** `--no-process-group`, or it kills
     pytest (and without `--no-process-group` it fails to `setsid`).
 

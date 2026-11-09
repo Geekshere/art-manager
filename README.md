@@ -27,23 +27,60 @@ It only ever touches artwork — never tags, genres or filenames.
 
 ## Install and run
 
-Python 3.10+ in a virtual environment (many Linux distributions block
-system-wide `pip`):
+### Easiest: download the app (no Python needed)
+
+| System | Download |
+|---|---|
+| Windows 10/11 | [art-manager-windows-x64.exe](https://github.com/Geekshere/art-manager/releases/latest/download/art-manager-windows-x64.exe) |
+| macOS (Apple Silicon) | [art-manager-macos-arm64.zip](https://github.com/Geekshere/art-manager/releases/latest/download/art-manager-macos-arm64.zip) |
+| Linux (64-bit) | [art-manager-linux-x64](https://github.com/Geekshere/art-manager/releases/latest/download/art-manager-linux-x64) |
+
+Double-click it. A small window shows the address and your browser opens Art
+Manager; close the window to stop it. The apps aren't code-signed, so the first
+start needs one extra click: Windows → *More info* → *Run anyway*; macOS →
+right-click → *Open*; Linux → `chmod +x` first. All releases:
+[Releases page](https://github.com/Geekshere/art-manager/releases).
+
+### With one command (any system with internet access)
+
+[uv](https://docs.astral.sh/uv/) installs Art Manager in its own isolated
+environment — no venv to manage, and it fetches Python if you don't have it:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install .                      # or: pip install -r requirements.txt
-art-manager /path/to/Music         # from a checkout, `python app.py …` works too
+uv tool install git+https://github.com/Geekshere/art-manager
+art-manager
 ```
 
-Then open <http://localhost:5000>. With no argument it uses the library saved
-in Settings.
+Update later with `uv tool upgrade art-manager`. (`pipx install
+git+https://github.com/Geekshere/art-manager` works the same way.)
+
+### First start
+
+The first time, Art Manager asks **where your music is**:
+
+- **This computer** — pick the folder with **Browse…**
+- **Network share (SMB)** — your NAS or a shared Windows folder: server name
+  (or paste `\\nas\Media\Music`), share and folder, username and password
+- **WebDAV** — Nextcloud, ownCloud or a NAS WebDAV server: address, username,
+  password
+
+**Test connection**, then **Save & scan library**. Everything is saved — next
+time just start the app. Change it any time under **Settings → Change library…**.
+
+Under **Settings → Access** you can let your phone or other computers on your
+network use Art Manager and set an app password (both saved; they take effect
+the next time you start it).
+
+### Command line (optional)
+
+Everything you pass is remembered, so you only ever pass it once:
 
 ```bash
-art-manager smb://nas.local/Media/Music --user myuser
+art-manager /path/to/Music
+art-manager smb://nas.local/Media/Music --user myuser --pass '...'
 art-manager webdavs://cloud.example.com/remote.php/dav/files/myuser/Music --user myuser
-art-manager --host 0.0.0.0 --password 'choose-one'    # reachable from other devices
+art-manager --host 0.0.0.0 --password 'choose-one'   # this run only: other devices + password
+art-manager --no-browser                             # don't open the browser
 ```
 
 ### Docker
@@ -56,6 +93,15 @@ docker run -p 5000:5000 -v /path/to/Music:/music -v art-manager-data:/data \
 
 See `compose.example.yaml`. The container listens on all interfaces, so set a
 password; run it as the user that owns your music files.
+
+### From source (for development)
+
+```bash
+git clone https://github.com/Geekshere/art-manager && cd art-manager
+python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements-dev.txt
+python app.py
+```
 
 ## Library layout
 
@@ -103,9 +149,11 @@ every **Update Library**.
 
 ## Settings and secrets
 
-Settings are saved to `config.json` (readable by your user only) next to
-`app.py` in a checkout, or in `~/.config/art-manager/` (`%APPDATA%\art-manager`
-on Windows) when installed; `ARTMGR_DATA_DIR` overrides the location. See
+Settings are saved to `config.json` (readable by your user only): next to
+`app.py` in a source checkout; otherwise in `%APPDATA%\art-manager` (Windows),
+`~/Library/Application Support/Art Manager` (macOS) or `~/.config/art-manager`
+(Linux). `ARTMGR_DATA_DIR` overrides the location. The app password is stored
+only as a salted hash. See
 `config.example.json`.
 
 Secrets can come from environment variables instead; they override
@@ -119,6 +167,7 @@ Secrets can come from environment variables instead; they override
 | `ARTMGR_DISCOGS_TOKEN` | Discogs personal token |
 | `ARTMGR_PASSWORD` | same as `--password` |
 | `ARTMGR_HOST` / `ARTMGR_PORT` | same as `--host` / `--port` |
+| `ARTMGR_DEBUG=1` | log what each search source returned (troubleshooting) |
 
 ## Artwork sources
 
@@ -148,7 +197,8 @@ Search API) can be added to `PROVIDERS` in `art_manager/search.py`.
 
 - By default the server listens on `127.0.0.1` only and rejects requests whose
   `Host` header isn't `localhost`/`127.0.0.1` (DNS rebinding protection).
-- `--host 0.0.0.0` makes it reachable from other devices; add `--password` (any
+- **Settings → Access → Other devices** (or `--host 0.0.0.0`) makes it reachable
+  from other devices; set an **app password** there (or `--password`; any
   username in the browser prompt). Without one, anyone who can reach the port
   can change your library. It is plain HTTP — don't expose it to the internet.
 - Saved passwords and keys are never sent back to the browser.

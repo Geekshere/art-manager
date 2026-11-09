@@ -5,13 +5,15 @@ Each source is a plain function returning [{url, thumb, label, source, quality}]
 that RAISES on failure; run_providers() turns an exception or timeout into an
 "unavailable" status for that one source and never lets it break the others.
 """
-import concurrent.futures, re, time
+import concurrent.futures, logging, re, time
 
 import requests
 
 from .config import cfg
 
-_MB_UA = 'ArtManager/0.3 (+https://github.com/Geekshere/art-manager)'
+log = logging.getLogger('art_manager.search')
+
+_MB_UA = 'ArtManager/0.4 (+https://github.com/Geekshere/art-manager)'
 
 # ── Size helpers ──────────────────────────────────────────────────────────────
 
@@ -338,8 +340,11 @@ def _web_images(query, page=0):
         try:
             raw = fut.result(timeout=_DDG_TIMEOUT + 2)
         except Exception as e:
+            log.info('web search %s %r failed: %r', label, query, e)
             errors.append(f'{label}: {_short_error(e)}')
             continue
+        log.info('web search %s %r: %d raw results', label, query, len(raw))
+        if raw: log.debug('web search %s first raw result: %r', label, raw[0])
         for item in raw:
             img = item.get('image') or ''
             if not img.startswith(('http://', 'https://')):
