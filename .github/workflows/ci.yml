@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-linux:
+    name: Tests (Linux, Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: System packages (ffmpeg for fixtures, Samba for SMB integration tests)
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg samba
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Playwright (browser tests)
+        run: |
+          npm install --no-save --no-package-lock playwright@1.63.0
+          npx playwright install --with-deps chromium
+      - name: Python dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Tests
+        run: pytest -q -rs
+
+  test-windows:
+    name: Tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: ffmpeg
+        run: choco install ffmpeg -y --no-progress
+      - name: Python dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Tests (SMB and browser tests skip here)
+        run: pytest -q -rs
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t art-manager:ci .
+      - name: Smoke test
+        run: |
+          mkdir -p /tmp/music/Artist/Album && touch /tmp/music/Artist/Album/01.flac
+          docker run -d --name am -p 5000:5000 -e ARTMGR_PASSWORD=ci -v /tmp/music:/music art-manager:ci /music
+          for i in $(seq 1 30); do curl -sf -u x:ci localhost:5000/api/config >/dev/null && break; sleep 1; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:5000/api/config)" = 401
+          curl -sf -u x:ci localhost:5000/api/scan | grep -q '"name":"Artist"'
+          docker rm -f am

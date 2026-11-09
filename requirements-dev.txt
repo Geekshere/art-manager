@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest>=8
+wsgidav>=4.3       # WebDAV server for the integration tests
+cheroot>=10

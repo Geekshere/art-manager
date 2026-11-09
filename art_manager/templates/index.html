@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Art Manager</title>
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:system-ui,-apple-system,'Segoe UI',sans-serif; font-size:13px; background:#fff; color:#111; line-height:1.5; }
+#hdr { border-bottom:1px solid #ccc; padding:6px 14px; display:flex; align-items:center; gap:10px; background:#fafafa; position:sticky; top:0; z-index:10; }
+#hdr strong { font-size:14px; }
+#hdr-path { color:#555; font-size:12px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#hdr-msg  { font-size:11px; }
+.page { padding:16px; max-width:1380px; margin:0 auto; }
+button { padding:4px 10px; border:1px solid #aaa; background:#f5f5f5; cursor:pointer; font-size:12px; font-family:inherit; border-radius:2px; }
+button:hover { background:#e5e5e5; }
+button:disabled { opacity:.4; cursor:default; }
+button.primary  { background:#333; color:#fff; border-color:#333; }
+button.primary:hover { background:#111; }
+button.done-btn { background:#1a6f1a; color:#fff; border-color:#1a6f1a; }
+button.done-btn:hover { background:#155015; }
+button.stale { background:#fff3cd; border-color:#e0a800; color:#7a5b00; font-weight:600; }
+button.stale:hover { background:#ffe8a1; }
+#hdr-scanned { color:#888; font-size:11px; white-space:nowrap; }
+input[type=text],input[type=password] { border:1px solid #bbb; padding:4px 7px; font-size:13px; font-family:inherit; border-radius:2px; }
+input:focus { outline:2px solid #999; }
+h2 { font-size:16px; margin-bottom:10px; }
+h3 { font-size:12px; font-weight:700; color:#555; text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }
+.sep  { border:none; border-top:1px solid #ddd; margin:10px 0; }
+.note { color:#666; font-size:11px; }
+.err  { color:#c00; }
+.ok   { color:#060; }
+.warn { color:#a60; }
+
+/* Wizard bar */
+#wiz-bar { background:#f5f5f5; border-bottom:1px solid #ddd; padding:7px 14px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+#wiz-track { flex:1; min-width:200px; }
+#wiz-label { font-size:13px; font-weight:500; }
+#wiz-pos { font-size:11px; color:#888; white-space:nowrap; }
+.wiz-pbar-outer { height:3px; background:#ddd; margin-top:4px; border-radius:2px; }
+.wiz-pbar-inner { height:100%; background:#444; border-radius:2px; transition:width .3s; }
+
+/* Artist list */
+#al-filter { padding:4px 8px; font-size:12px; border:1px solid #bbb; border-radius:2px; width:220px; }
+#artist-list-table { width:100%; border-collapse:collapse; }
+#artist-list-table th { text-align:left; padding:5px 8px; border-bottom:2px solid #ccc; font-size:12px; }
+#artist-list-table td { padding:5px 8px; border-bottom:1px solid #eee; vertical-align:middle; }
+#artist-list-table tr:hover td { background:#f8f8f8; }
+#artist-list-table tr.hidden-row { display:none; }
+
+/* Step header */
+.step-hdr { display:flex; align-items:flex-start; gap:12px; margin-bottom:14px; }
+.step-hdr-text { flex:1; }
+.step-hdr h2 { margin:0; }
+.step-nav { display:flex; gap:6px; align-items:center; flex-shrink:0; }
+
+/* Image grid */
+.img-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:6px; margin-top:8px; }
+.img-cell { border:2px solid #ddd; cursor:pointer; background:#f0f0f0; }
+.img-cell:hover { border-color:#666; }
+.img-cell.sel   { border-color:#111; outline:1px solid #111; }
+.img-cell img   { width:100%; aspect-ratio:1; object-fit:cover; display:block; }
+.img-cell-lbl   { font-size:10px; color:#555; padding:3px 5px; background:#fff; border-top:1px solid #e0e0e0; line-height:1.4; }
+.lbl-source  { font-weight:700; color:#333; }
+.lbl-quality { color:#006600; font-weight:600; }
+
+/* Hover preview */
+#hover-preview { position:fixed; display:none; background:#fff; border:1px solid #999; padding:4px; box-shadow:3px 3px 12px rgba(0,0,0,.3); z-index:9999; pointer-events:none; }
+#hover-preview img { display:block; max-width:400px; max-height:400px; object-fit:contain; }
+#hp-dim { font-size:10px; color:#777; text-align:center; padding:2px 0 0; }
+
+.pg-row { display:flex; align-items:center; gap:6px; margin:5px 0; font-size:11px; }
+.sources { font-size:11px; color:#666; margin:2px 0; }
+.src-on  { color:#004400; font-weight:600; }
+.src-off { color:#aaa; }
+.src-cnt { color:#666; }
+.src-loading { color:#888; font-style:italic; }
+.src-unavail { color:#a60; }
+
+/* Three-column layout */
+.three-col { display:grid; grid-template-columns:230px 1fr 270px; gap:14px; align-items:start; }
+
+/* Left panel */
+#alb-cover-img { width:210px; height:210px; object-fit:contain; display:block; border:1px solid #ccc; background:#f0f0f0; cursor:zoom-in; }
+.cover-info  { font-size:11px; color:#555; margin:4px 0; }
+.disc-info-row { font-size:11px; margin:2px 0; display:flex; align-items:center; gap:4px; }
+#alb-emb-thumb { width:70px; height:70px; object-fit:contain; border:1px solid #ddd; display:none; cursor:zoom-in; vertical-align:middle; }
+#sa-cur  { width:190px; height:190px; object-fit:cover; border:1px solid #ccc; display:none; background:#f0f0f0; cursor:zoom-in; }
+#sa-none { width:190px; height:190px; border:1px dashed #ccc; display:flex; align-items:center; justify-content:center; color:#bbb; font-size:12px; }
+
+/* Tracks */
+#alb-tracks { max-height:500px; overflow-y:auto; border:1px solid #ddd; }
+.disc-grp-hdr { padding:4px 8px; background:#f5f5f5; border-bottom:1px solid #ddd; font-size:11px; font-weight:700; color:#555; position:sticky; top:0; }
+.track-row { display:flex; align-items:center; gap:6px; padding:3px 8px; border-bottom:1px solid #f0f0f0; min-height:28px; }
+.track-num   { font-size:10px; color:#aaa; min-width:20px; text-align:right; flex-shrink:0; }
+.track-art   { width:22px; height:22px; object-fit:cover; flex-shrink:0; border:1px solid #e0e0e0; cursor:zoom-in; }
+.track-noart { width:22px; height:22px; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:#ddd; }
+.track-title { font-size:11px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* Embed progress */
+#alb-prog { margin-top:12px; padding:10px 12px; border:1px solid #ddd; background:#fafafa; }
+.emb-pbar-outer { height:18px; background:#e5e5e5; border:1px solid #bbb; border-radius:2px; overflow:hidden; margin:6px 0 3px; }
+.emb-pbar-inner { height:100%; background:#333; display:flex; align-items:center; padding:0 6px; color:#fff; font-size:10px; white-space:nowrap; min-width:28px; transition:width .2s; }
+#alb-prog-file { font-size:10px; color:#777; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* Settings */
+.cfg-row { display:flex; gap:8px; align-items:center; margin:8px 0; }
+.cfg-row label { min-width:130px; color:#444; font-size:12px; }
+.cfg-row input { width:360px; }
+.cfg-row input[type=checkbox] { width:auto; margin:0; }
+
+/* Missing */
+.miss-section { margin-bottom:16px; }
+.miss-item { padding:3px 0; font-size:12px; border-bottom:1px solid #f0f0f0; }
+
+/* Misc */
+.spinner { display:inline-block; width:12px; height:12px; border:2px solid #ddd; border-top-color:#555; border-radius:50%; animation:spin .7s linear infinite; vertical-align:middle; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.hidden { display:none !important; }
+select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; background:#fff; border-radius:2px; }
+</style>
+</head>
+<body>
+
+<div id="hdr">
+    <strong>Art Manager</strong>
+    <span id="hdr-path">no library</span>
+    <span id="hdr-scanned"></span>
+    <button id="hdr-update-btn" onclick="doScan(true)" title="Rescan the library for new/changed files">⟳ Update Library</button>
+    <span id="hdr-msg"></span>
+    <a id="hdr-errors" href="#" class="warn hidden" style="font-size:11px" onclick="toggleScanErrors();return false"></a>
+    <button onclick="showV('v-settings')">Settings</button>
+    <button onclick="showMissing()">Missing Report</button>
+</div>
+
+<div id="scan-errors" class="hidden" style="background:#fff8e5;border-bottom:1px solid #e0c060;padding:8px 14px;font-size:12px">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:4px">
+        <strong>Some folders could not be read during the last scan.</strong>
+        <span class="note">They will be retried on the next Update Library. Albums already known from an earlier scan are kept.</span>
+        <button style="margin-left:auto" onclick="toggleScanErrors()">Close</button>
+    </div>
+    <div id="scan-errors-list" style="max-height:200px;overflow:auto;font-family:ui-monospace,monospace;font-size:11px"></div>
+</div>
+
+<div id="hover-preview"><img id="hp-img" alt=""><div id="hp-dim"></div></div>
+
+<!-- SETUP -->
+<div id="v-setup" class="page">
+    <h2>Library Path</h2>
+    <p style="margin-bottom:10px;color:#555;font-size:12px">Root directory containing your artist folders.</p>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+        <input type="text" id="inp-root" style="width:400px" placeholder="Z:\Music" onkeydown="if(event.key==='Enter')doScan(false)">
+        <button class="primary" onclick="doScan(false)">Scan Library</button>
+    </div>
+    <p id="setup-err" class="err" style="font-size:12px"></p>
+    <p class="note" style="margin-top:8px">Or at launch: <code>python app.py "Z:\Music"</code></p>
+</div>
+
+<!-- WIZARD BAR -->
+<div id="wiz-bar" class="hidden">
+    <div id="wiz-track">
+        <div id="wiz-label">...</div>
+        <div class="wiz-pbar-outer"><div class="wiz-pbar-inner" id="wiz-fill" style="width:0%"></div></div>
+    </div>
+    <span id="wiz-pos"></span>
+    <select id="jump-to" onchange="jumpTo(this.value)"><option value="">Jump to artist...</option></select>
+    <button onclick="showArtistList()">Artist list</button>
+</div>
+
+<!-- ARTIST LIST -->
+<div id="v-artists" class="page hidden">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+        <h2 style="margin:0">Artists</h2>
+        <input type="text" id="al-filter" placeholder="Filter artists..." oninput="filterArtistList(this.value)">
+        <span id="al-count" class="note"></span>
+        <button onclick="doScan(true)" style="margin-left:auto">↺ Rescan</button>
+        <button class="primary" id="wiz-start-btn" onclick="startWizard()">Start wizard →</button>
+    </div>
+    <table id="artist-list-table">
+        <thead><tr>
+            <th>Artist</th><th>Artist image</th><th>Albums</th><th>Missing covers</th><th></th>
+        </tr></thead>
+        <tbody id="artist-list-body"></tbody>
+    </table>
+</div>
+
+<!-- STEP: ARTIST IMAGE -->
+<div id="step-artist" class="page hidden">
+    <div class="step-hdr">
+        <div class="step-hdr-text">
+            <h2 id="sa-name"></h2>
+            <div id="sa-status" class="note"></div>
+        </div>
+        <div class="step-nav">
+            <button onclick="stepBack()">← Back</button>
+            <button id="sa-skip-btn" onclick="stepNext()">Skip →</button>
+        </div>
+    </div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap">
+        <div>
+            <h3>Current</h3>
+            <img id="sa-cur" alt="artist image">
+            <div id="sa-none" class="hidden" style="width:190px;height:190px;border:1px dashed #ccc;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:12px">no artist.jpg</div>
+            <div id="sa-dim" class="note" style="margin-top:3px"></div>
+            <div id="sa-saved" class="ok hidden" style="margin-top:6px;font-size:12px"></div>
+            <div style="margin-top:10px">
+                <button id="sa-continue-btn" class="done-btn hidden" onclick="stepNext()">Continue to albums →</button>
+            </div>
+        </div>
+        <div style="flex:1;min-width:300px">
+            <h3>Search</h3>
+            <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">
+                <input type="text" id="sa-q" style="width:175px" onkeydown="if(event.key==='Enter')searchArtistImg(0)">
+                <button onclick="searchArtistImg(0)">Search</button>
+                <input type="text" id="sa-url-input" style="flex:1;min-width:120px" placeholder="or paste URL...">
+                <button onclick="useUrlForArtist()">Use URL</button>
+                <input type="file" id="sa-upload-input" accept="image/jpeg,image/png" class="hidden" onchange="handleArtistUpload(this)">
+                <button onclick="document.getElementById('sa-upload-input').click()">Upload...</button>
+            </div>
+            <div class="pg-row">
+                <button id="sa-prev" onclick="artDispPrev()" disabled>← Prev</button>
+                <span id="sa-pgnum" class="note"></span>
+                <button id="sa-next" onclick="artDispNext()">Next →</button>
+                <button id="sa-load-more" class="hidden" onclick="searchArtistImg(artistSrcPg+1)" style="margin-left:auto;font-size:11px">Load more</button>
+            </div>
+            <div class="sources" id="sa-sources"></div>
+            <div id="sa-search-status" class="note" style="margin-top:3px"></div>
+            <div id="sa-grid" class="img-grid"></div>
+        </div>
+    </div>
+</div>
+
+<!-- STEP: ALBUM -->
+<div id="step-album" class="page hidden">
+    <div class="step-hdr">
+        <div class="step-hdr-text">
+            <h2><span id="alb-artist-name"></span> — <span id="alb-name"></span></h2>
+            <div id="alb-badge" class="note"></div>
+        </div>
+        <div class="step-nav">
+            <button onclick="stepBack()">← Back</button>
+            <button id="alb-skip-btn" onclick="stepNext()">Skip →</button>
+        </div>
+    </div>
+
+    <div class="three-col">
+        <!-- LEFT -->
+        <div>
+            <h3>Current cover</h3>
+            <img id="alb-cover-img" alt="cover" style="display:none">
+            <div id="alb-cover-none" style="width:210px;height:210px;border:1px dashed #ccc;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:12px">no cover.jpg</div>
+            <div class="cover-info" id="alb-cover-info"></div>
+            <div id="alb-disc-covers"></div>
+            <hr class="sep">
+            <h3>Embedded in tracks</h3>
+            <span id="alb-emb-status" class="note"><span class="spinner"></span> checking...</span>
+            <img id="alb-emb-thumb" alt="embedded">
+            <div id="alb-emb-dim" class="note" style="margin-top:2px"></div>
+            <div style="margin-top:5px">
+                <button id="alb-use-emb-btn" class="hidden" onclick="doEmbed('embedded')">Use embedded as cover &amp; re-embed</button>
+            </div>
+            <hr class="sep">
+            <button id="alb-keep-btn" class="hidden" onclick="doEmbed('cover_file')">Keep current cover — embed all tracks</button>
+        </div>
+
+        <!-- MIDDLE -->
+        <div>
+            <h3>Search for art</h3>
+            <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">
+                <input type="text" id="alb-aq"  style="width:110px" placeholder="artist" onkeydown="if(event.key==='Enter')searchAlbumArt(0)">
+                <input type="text" id="alb-alq" style="width:130px" placeholder="album" onkeydown="if(event.key==='Enter')searchAlbumArt(0)">
+                <button onclick="searchAlbumArt(0)">Search</button>
+                <input type="text" id="alb-url-input" style="flex:1;min-width:90px" placeholder="or paste URL...">
+                <button onclick="useUrlForAlbum()">Use URL</button>
+                <input type="file" id="alb-upload-input" accept="image/jpeg,image/png" class="hidden" onchange="handleAlbumUpload(this)">
+                <button onclick="document.getElementById('alb-upload-input').click()">Upload...</button>
+            </div>
+            <div class="pg-row">
+                <button id="alb-prev" onclick="albDispPrev()" disabled>← Prev</button>
+                <span id="alb-pgnum" class="note"></span>
+                <button id="alb-next" onclick="albDispNext()">Next →</button>
+                <button id="alb-load-more" class="hidden" onclick="searchAlbumArt(albumSrcPg+1)" style="margin-left:auto;font-size:11px">Load more from APIs</button>
+            </div>
+            <div class="sources" id="alb-sources"></div>
+            <div id="alb-search-status" class="note" style="margin-top:3px"></div>
+            <div id="alb-grid" class="img-grid"></div>
+        </div>
+
+        <!-- RIGHT -->
+        <div>
+            <h3>Tracks <span id="alb-track-count" class="note"></span></h3>
+            <div id="alb-tracks"><div style="padding:8px;color:#888"><span class="spinner"></span> loading...</div></div>
+        </div>
+    </div>
+
+    <div id="alb-prog" class="hidden" style="margin-top:12px;padding:10px 12px;border:1px solid #ddd;background:#fafafa">
+        <h3>Embedding</h3>
+        <div style="display:flex;align-items:center;gap:10px;margin:6px 0">
+            <img id="alb-prog-thumb" style="width:44px;height:44px;object-fit:contain;border:1px solid #ccc" alt="">
+            <div id="alb-prog-lbl" class="note">preparing...</div>
+        </div>
+        <div class="emb-pbar-outer"><div class="emb-pbar-inner" id="alb-prog-bar" style="width:0%">0%</div></div>
+        <div id="alb-prog-file"></div>
+    </div>
+
+    <div id="alb-done" class="hidden" style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span id="alb-done-txt" class="ok" style="font-weight:600"></span>
+        <span id="alb-done-err" class="warn"></span>
+        <button class="done-btn" onclick="stepNext()">Next →</button>
+        <button onclick="showArtistList()">Back to list</button>
+    </div>
+</div>
+
+<!-- SETTINGS -->
+<div id="v-settings" class="page hidden">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <h2 style="margin:0">Settings</h2>
+        <button onclick="goBack()">← Back</button>
+    </div>
+    <div class="cfg-row"><label>Library root</label><input type="text" id="cfg-root" placeholder="/path/to/Music, smb://nas.local/Media/Music or webdavs://host/path" oninput="toggleConnFields()"><button onclick="saveCfg()">Save</button><button id="conn-test-btn" onclick="testConnection()">Test connection</button></div>
+    <p class="note" style="max-width:600px;margin:-4px 0 8px 138px">
+        A local folder (<code>Z:\Music</code>, <code>/mnt/music</code>), or a network location read directly — no drive mapping needed:
+        <code>smb://nas.local/Media/Music</code> for a Windows/Samba share,
+        <code>webdavs://cloud.example.com/remote.php/dav/files/myuser/Music</code> (or the plain <code>https://</code> URL) for WebDAV (Nextcloud, ownCloud, NAS WebDAV servers).
+        Never put the password in the URL. <span id="conn-kind" class="ok"></span></p>
+    <div id="conn-fields" class="hidden">
+        <div class="cfg-row"><label id="cfg-user-lbl">Username</label><input type="text" id="cfg-user" placeholder="username" autocomplete="off"></div>
+        <div class="cfg-row"><label id="cfg-pass-lbl">Password</label><input type="password" id="cfg-pass" placeholder="password" autocomplete="new-password"><button id="cfg-pass-clear" class="hidden" onclick="clearSecret('storage_password')">Clear</button></div>
+        <div class="cfg-row" id="smb-port-row"><label>SMB port</label><input type="text" id="cfg-smb-port" style="width:70px" placeholder="445"></div>
+        <div class="cfg-row"><label></label><button onclick="saveCfg()">Save</button></div>
+        <p class="note" style="max-width:600px;margin:0 0 8px 138px">Saved passwords and keys are never shown again — leave the field blank to keep the saved one. They are stored in config.json (readable only by your user), or can be supplied via the ARTMGR_STORAGE_PASSWORD / ARTMGR_FANART_KEY / ARTMGR_DISCOGS_TOKEN environment variables instead.</p>
+    </div>
+    <div class="cfg-row"><label>Fanart.tv key</label><input type="password" id="cfg-ft" placeholder="free key at fanart.tv" autocomplete="new-password"><button onclick="saveCfg()">Save</button><button id="cfg-ft-clear" class="hidden" onclick="clearSecret('fanart_key')">Clear</button></div>
+    <div class="cfg-row"><label>Discogs token</label><input type="password" id="cfg-dc" placeholder="free personal token (discogs.com → Settings → Developers)" autocomplete="new-password"><button onclick="saveCfg()">Save</button><button id="cfg-dc-clear" class="hidden" onclick="clearSecret('discogs_token')">Clear</button></div>
+    <div class="cfg-row"><label>Web image search</label><label style="min-width:0;display:flex;gap:6px;align-items:center;color:#333"><input type="checkbox" id="cfg-web" onchange="saveCfg()"> include DuckDuckGo + Bing image results (unofficial, best effort)</label></div>
+    <div class="cfg-row" style="align-items:flex-start">
+        <label>Ignored folders</label>
+        <textarea id="cfg-ignored" rows="5" style="width:360px;font-family:inherit;font-size:12px;border:1px solid #bbb;padding:4px 7px;border-radius:2px" placeholder="one name or pattern per line, e.g. !Playlists"></textarea>
+        <div style="display:flex;flex-direction:column;gap:4px">
+            <button onclick="saveCfg()">Save</button>
+            <button onclick="resetIgnored()" title="Restore the built-in list">Defaults</button>
+        </div>
+    </div>
+    <p class="note" style="max-width:600px;margin:-4px 0 8px 138px">Folder names skipped at every level (artists, albums, discs). Case-insensitive; <code>*</code> and <code>?</code> wildcards allowed. Takes effect immediately; folders removed from this list reappear after <strong>Update Library</strong>.</p>
+    <p id="cfg-status" class="note" style="margin-top:6px;max-width:600px"></p>
+    <hr class="sep">
+    <h3>Image sources</h3>
+    <table style="font-size:12px;border-collapse:collapse;margin-top:8px;color:#555">
+        <tr><td style="padding:3px 8px 3px 0;font-weight:700;color:#333;white-space:nowrap">CAA</td><td>Cover Art Archive — verified scans from MusicBrainz. Often 1500–3000px+. Shown first. Rate-limited, first page only.</td></tr>
+        <tr><td style="padding:3px 8px 3px 0;font-weight:700;color:#333;white-space:nowrap">iTunes</td><td>3000×3000 supplied directly by labels. Very reliable for major releases.</td></tr>
+        <tr><td style="padding:3px 8px 3px 0;font-weight:700;color:#333;white-space:nowrap">Deezer</td><td>~1000px album art, good coverage for non-English / obscure releases.</td></tr>
+        <tr><td style="padding:3px 8px 3px 0;font-weight:700;color:#333;white-space:nowrap">Discogs</td><td>Community high-res scans. Excellent for vinyl, physical releases, non-English music. Discogs only returns images to signed-in API users, so it needs a free personal token (above).</td></tr>
+        <tr><td style="padding:3px 8px 3px 0;font-weight:700;color:#333;white-space:nowrap">Wikipedia</td><td>Artist images — no key needed. Good press photos for known artists.</td></tr>
+        <tr><td style="padding:3px 8px 3px 0;font-weight:700;color:#333;white-space:nowrap">Fanart.tv</td><td>Best artist photos, typically 1000–1920px. Free API key at fanart.tv.</td></tr>
+        <tr><td style="padding:3px 8px 3px 0;font-weight:700;color:#333;white-space:nowrap">Web</td><td>General image search via DuckDuckGo and Bing. Neither has an official keyless API — this uses the same unofficial endpoints as their websites, so it may be rate-limited or stop working; it then shows as <em>unavailable</em> and the other sources carry on. Results are filtered for relevance and shown after all other sources.</td></tr>
+    </table>
+    <p class="note" style="margin-top:8px">CAA and Web load separately (slower): CAA is added to the front of the results, Web to the end. iTunes, Deezer, CAA, Wikipedia and Web need no key.</p>
+</div>
+
+<!-- MISSING -->
+<div id="v-missing" class="page hidden">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <h2 style="margin:0">Missing Artwork</h2>
+        <button onclick="goBack()">← Back</button>
+        <span class="note">Updates as you work — no rescan needed</span>
+    </div>
+    <div id="missing-body"></div>
+</div>
+
+<script>
+'use strict';
+let lib=null, fullQueue=[], wizardQueue=[], activeQueue=[], pos=0, prevView='v-setup';
+let embedding=false;
+let curAI=-1, curALI=-1;
+
+// ── Stale-response guards ─────────────────────────────────────────────────
+// Every async response that writes shared UI state checks one of these after
+// its await and drops itself if the user has moved on in the meantime.
+//   stepGen          — bumped each time an artist/album step is loaded
+//   artistSearchGen  — bumped by a NEW artist search (not by "Load more")
+//   albumSearchGen   — same, for album search (covers both fast + slow phase)
+let stepGen=0, artistSearchGen=0, albumSearchGen=0;
+let clientCfg={has_fanart_key:false, has_storage_password:false, has_discogs_token:false, web_search:true};
+
+// Artist search state
+let allArtistResults=[], artistDispPg=0, artistSrcPg=0;
+const ARTIST_PG_SIZE=20;
+
+// Album search state
+let allAlbumResults=[], albumDispPg=0, albumSrcPg=0;
+const ALBUM_PG_SIZE=20;
+
+// ── Hover preview ─────────────────────────────────────────────────────────
+(function(){
+    const pre=document.getElementById('hover-preview');
+    const hi=document.getElementById('hp-img');
+    const hd=document.getElementById('hp-dim');
+    let hideTimer=null;
+    function show(url,x,y){
+        clearTimeout(hideTimer);
+        hi.src=url; hd.textContent='';
+        hi.onload=function(){ if(this.naturalWidth) hd.textContent=this.naturalWidth+'×'+this.naturalHeight; };
+        pre.style.display='block'; place(x,y);
+    }
+    function place(x,y){
+        let lx=x+18, ly=y+18;
+        if(lx+420>window.innerWidth)  lx=x-420;
+        if(ly+420>window.innerHeight) ly=Math.max(10,y-420);
+        pre.style.left=lx+'px'; pre.style.top=ly+'px';
+    }
+    let _hC=null;  // currently hovered cell (for dimension update)
+    document.addEventListener('mouseover', e=>{
+        const c=e.target.closest('[data-full]');
+        if(c){
+            clearTimeout(hideTimer);
+            _hC=c;
+            hd.textContent=c.dataset.quality||'';
+            hi.onload=function(){
+                if(this.naturalWidth){
+                    const dims=this.naturalWidth+'×'+this.naturalHeight;
+                    hd.textContent=dims;
+                    if(_hC&&_hC.dataset.full===hi.src){
+                        _hC.dataset.quality=this.naturalWidth+'px';
+                    }
+                }
+            };
+            show(c.dataset.full, e.clientX, e.clientY);
+        }
+    });
+    document.addEventListener('mousemove', e=>{
+        if(pre.style.display==='block') place(e.clientX,e.clientY);
+    });
+    document.addEventListener('mouseout', e=>{
+        if(e.target.closest('[data-full]'))
+            hideTimer=setTimeout(()=>{ pre.style.display='none'; }, 80);
+    });
+    // Click-to-zoom for local images
+    ['alb-cover-img','sa-cur','alb-emb-thumb'].forEach(id=>{
+        document.getElementById(id).addEventListener('click', function(){
+            if(this.src && !this.src.endsWith('#')){ show(this.src, window.innerWidth/2-200, window.innerHeight/2-200); }
+        });
+    });
+    document.addEventListener('click', e=>{
+        if(!e.target.closest('[data-full],[id=alb-cover-img],[id=sa-cur],[id=alb-emb-thumb]'))
+            pre.style.display='none';
+    });
+})();
+
+// ── URL ───────────────────────────────────────────────────────────────────
+// Uses the exact (encoded) name rather than a "pretty" slug — a regex-based
+// slug strips all non-word characters, which collapses names made entirely
+// of symbols (e.g. "!!!") to an empty string and breaks routing. encodeURI-
+// Component always round-trips, whatever the name contains.
+function updateURL(artist,album){
+    if(!artist){ history.pushState({},'','/'); return; }
+    const p=album?'/'+encodeURIComponent(artist.name)+'/'+encodeURIComponent(album.name)+'/':'/'+encodeURIComponent(artist.name)+'/';
+    history.pushState({ai:curAI,ali:curALI},'',p);
+}
+function navigateFromURL(){
+    if(!lib) return false;
+    const parts=window.location.pathname.split('/').filter(Boolean).map(p=>{
+        try{ return decodeURIComponent(p); }catch(_){ return p; }
+    });
+    if(!parts.length) return false;
+    const artist=lib.artists.find(a=>a.name===parts[0]);
+    if(!artist) return false;
+    const ai=lib.artists.indexOf(artist);
+    activeQueue=fullQueue;   // URL navigation always resolves against the full library
+    if(parts[1]){
+        const album=artist.albums.find(al=>al.name===parts[1]);
+        if(album){
+            const ali=artist.albums.indexOf(album);
+            const qi=fullQueue.findIndex(q=>q.type==='album'&&q.ai===ai&&q.ali===ali);
+            if(qi>=0){ pos=qi; showStep(pos); return true; }
+        }
+    } else {
+        const qi=fullQueue.findIndex(q=>q.type==='artist'&&q.ai===ai);
+        if(qi>=0){ pos=qi; showStep(pos); return true; }
+    }
+    return false;
+}
+window.addEventListener('popstate',()=>navigateFromURL());
+
+// ── Views ─────────────────────────────────────────────────────────────────
+const VIEWS=['v-setup','v-artists','step-artist','step-album','v-settings','v-missing'];
+function showV(id){
+    VIEWS.forEach(v=>document.getElementById(v).classList.add('hidden'));
+    document.getElementById(id).classList.remove('hidden');
+    document.getElementById('wiz-bar').classList.toggle('hidden',!lib||(id!=='step-artist'&&id!=='step-album'));
+    if(!['v-settings','v-missing'].includes(id)) prevView=id;
+}
+function showArtistList(){ activeQueue=fullQueue; history.pushState({},'','/'); renderArtistList(); showV('v-artists'); }
+function goBack(){ showV(prevView||'v-setup'); }
+
+// ── API ───────────────────────────────────────────────────────────────────
+async function api(url,opts={}){
+    const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opts});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.error||r.statusText);
+    return d;
+}
+function hdrMsg(msg,cls){ const e=document.getElementById('hdr-msg'); e.textContent=msg; e.className=cls||'note'; }
+function setEl(id,v){ document.getElementById(id).textContent=v; }
+
+// ── Config ────────────────────────────────────────────────────────────────
+function collectCfgBody(){
+    // Secrets are only sent when the user typed a new one; blank = keep the saved value.
+    const body={
+        library_root:document.getElementById('cfg-root').value.trim(),
+        web_search:document.getElementById('cfg-web').checked,
+        storage_username:document.getElementById('cfg-user').value.trim(),
+        smb_port:document.getElementById('cfg-smb-port').value.trim()||445,
+        ignored_folders:document.getElementById('cfg-ignored').value.split('\n').map(x=>x.trim()).filter(Boolean),
+    };
+    const ft=document.getElementById('cfg-ft').value.trim();
+    const pw=document.getElementById('cfg-pass').value;
+    if(ft) body.fanart_key=ft;
+    const dc=document.getElementById('cfg-dc').value.trim();
+    if(dc) body.discogs_token=dc;
+    if(pw) body.storage_password=pw;
+    return body;
+}
+function showSecretState(c){
+    // Never put a stored secret back into the form — just say one is saved.
+    [['cfg-pass','cfg-pass-clear',c.has_storage_password,'password'],
+     ['cfg-ft','cfg-ft-clear',c.has_fanart_key,'free key at fanart.tv'],
+     ['cfg-dc','cfg-dc-clear',c.has_discogs_token,'free personal token (discogs.com → Settings → Developers)']].forEach(([inp,clr,has,ph])=>{
+        const el=document.getElementById(inp);
+        el.value='';
+        el.placeholder=has?'••••••  saved (type to replace)':ph;
+        document.getElementById(clr).classList.toggle('hidden',!has);
+    });
+}
+function resetIgnored(){
+    document.getElementById('cfg-ignored').value=(clientCfg.default_ignored_folders||[]).join('\n');
+    saveCfg();
+}
+async function clearSecret(key){
+    try{
+        const c=await api('/api/config',{method:'POST',body:JSON.stringify({['clear_'+key]:true})});
+        clientCfg=c; showSecretState(c);
+    }catch(e){
+        const s=document.getElementById('cfg-status'); s.textContent='Error: '+e.message; s.className='err';
+    }
+}
+function storageKind(root){
+    const m=/^([a-z][a-z0-9+.-]*):\/\//i.exec(root||'');
+    const s=m?m[1].toLowerCase():'';
+    if(s==='smb') return 'smb';
+    if(['webdav','webdavs','http','https'].includes(s)) return 'webdav';
+    return 'local';
+}
+function toggleConnFields(){
+    const kind=storageKind(document.getElementById('cfg-root').value.trim());
+    document.getElementById('conn-fields').classList.toggle('hidden', kind==='local');
+    document.getElementById('smb-port-row').classList.toggle('hidden', kind!=='smb');
+    const label={smb:'SMB',webdav:'WebDAV'}[kind]||'';
+    setEl('cfg-user-lbl',label+' username'); setEl('cfg-pass-lbl',label+' password');
+    setEl('conn-kind',{local:'→ local folder',smb:'→ SMB share',webdav:'→ WebDAV'}[kind]);
+}
+async function loadCfg(){
+    try{
+        const c=await api('/api/config');
+        clientCfg=c;
+        document.getElementById('cfg-root').value=c.library_root||'';
+        document.getElementById('cfg-web').checked=c.web_search!==false;
+        document.getElementById('cfg-user').value=c.storage_username||'';
+        document.getElementById('cfg-smb-port').value=c.smb_port||445;
+        document.getElementById('cfg-ignored').value=(c.ignored_folders||[]).join('\n');
+        showSecretState(c);
+        toggleConnFields();
+        if(c.library_root) document.getElementById('inp-root').value=c.library_root;
+        computeStale();
+    }catch(_){}
+}
+async function saveCfg(){
+    const body=collectCfgBody();
+    try{
+        const c=await api('/api/config',{method:'POST',body:JSON.stringify(body)});
+        clientCfg=c;
+        showSecretState(c);
+        document.getElementById('cfg-ignored').value=(c.ignored_folders||[]).join('\n');
+        document.getElementById('inp-root').value=body.library_root;
+        if(lib){
+            try{ const fresh=await api('/api/library'); if(fresh.artists) applyLibrary(fresh); }catch(_){}
+        }
+        const s=document.getElementById('cfg-status');
+        s.textContent='✓ Saved'; s.className='ok';
+        computeStale();
+        setTimeout(()=>{ s.textContent=''; },2500);
+    }catch(e){
+        const s=document.getElementById('cfg-status'); s.textContent='Error: '+e.message; s.className='err';
+    }
+}
+
+async function testConnection(){
+    const root=document.getElementById('cfg-root').value.trim();
+    if(!root){ alert('Enter a library root first.'); return; }
+    const s=document.getElementById('cfg-status');
+    const btn=document.getElementById('conn-test-btn');
+    s.textContent='Testing connection...'; s.className='note';
+    btn.disabled=true;
+    try{
+        // Save current form first so the server tests with what's on screen
+        await api('/api/config',{method:'POST',body:JSON.stringify(collectCfgBody())});
+        const d=await api('/api/test-connection?root='+enc(root));
+        if(d.ok){ s.textContent='✓ '+d.msg; s.className='ok'; }
+        else{ s.textContent='✗ '+d.msg; s.className='err'; }
+    }catch(e){
+        s.textContent='✗ '+e.message; s.className='err';
+    }finally{
+        btn.disabled=false;
+    }
+}
+
+// ── Scan ──────────────────────────────────────────────────────────────────
+function fmtAgo(ts){
+    if(!ts) return '';
+    const s=Math.max(0, Math.floor(Date.now()/1000 - ts));
+    if(s<10) return 'just now';
+    if(s<60) return s+'s ago';
+    const m=Math.floor(s/60); if(m<60) return m+'m ago';
+    const h=Math.floor(m/60); if(h<24) return h+'h ago';
+    return Math.floor(h/24)+'d ago';
+}
+function computeStale(){
+    const btn=document.getElementById('hdr-update-btn');
+    if(!btn || btn.disabled) return;
+    const stale = !!(lib && clientCfg.library_root && lib.root!==clientCfg.library_root);
+    btn.classList.toggle('stale', stale);
+    btn.textContent = stale ? '⟳ Update Library (source changed)' : '⟳ Update Library';
+}
+setInterval(()=>{
+    if(lib && lib.scanned_at) document.getElementById('hdr-scanned').textContent='scanned '+fmtAgo(lib.scanned_at);
+}, 30000);
+
+async function doScan(force){
+    const root=document.getElementById('inp-root').value.trim();
+    if(!root) return;
+    document.getElementById('setup-err').textContent='';
+    const btn=document.getElementById('hdr-update-btn');
+    btn.disabled=true; btn.classList.remove('stale'); btn.textContent='⟳ Scanning…';
+    hdrMsg('Scanning library...');
+    try{
+        const d=await api('/api/scan?root='+enc(root));
+        applyLibrary(d);
+        if(!navigateFromURL()) showArtistList();
+        hdrMsg(d.errors&&d.errors.length?'Updated with errors':'✓ Updated', d.errors&&d.errors.length?'warn':'ok');
+        setTimeout(()=>hdrMsg(''),2500);
+    }catch(e){
+        document.getElementById('setup-err').textContent=e.message;
+        hdrMsg('✗ '+e.message,'err');
+    }
+    btn.disabled=false;
+    computeStale();
+}
+
+function renderScanErrors(){
+    const errs=(lib&&lib.errors)||[];
+    const a=document.getElementById('hdr-errors');
+    a.classList.toggle('hidden',!errs.length);
+    a.textContent='⚠ '+errs.length+' folder'+(errs.length===1?'':'s')+' could not be read';
+    document.getElementById('scan-errors-list').innerHTML=errs.map(e=>
+        '<div><span>'+esc(e.path)+'</span> — <span class="err">'+esc(e.message)+'</span></div>').join('');
+    if(!errs.length) document.getElementById('scan-errors').classList.add('hidden');
+}
+function toggleScanErrors(){ document.getElementById('scan-errors').classList.toggle('hidden'); }
+
+function applyLibrary(d){
+    lib=d;
+    renderScanErrors();
+    document.getElementById('hdr-path').textContent=lib.root;
+    document.getElementById('hdr-scanned').textContent=lib.scanned_at?('scanned '+fmtAgo(lib.scanned_at)):'';
+    computeStale();
+    buildQueue();
+    renderArtistList();   // keep the list in sync (e.g. after an ignore-list change)
+}
+
+// ── Queue ─────────────────────────────────────────────────────────────────
+function buildQueue(){
+    fullQueue=[];
+    lib.artists.forEach((a,ai)=>{
+        fullQueue.push({type:'artist',ai});
+        a.albums.forEach((_,ali)=>fullQueue.push({type:'album',ai,ali}));
+    });
+    activeQueue=fullQueue;
+    const sel=document.getElementById('jump-to');
+    sel.innerHTML='<option value="">Jump to artist...</option>';
+    lib.artists.forEach((a,ai)=>{
+        const done=a.albums.filter(al=>al.has_cover).length;
+        const opt=document.createElement('option');
+        opt.value=ai; opt.textContent=a.name+' ('+done+'/'+a.albums.length+')';
+        sel.appendChild(opt);
+    });
+}
+
+function jumpTo(ai){
+    if(ai==='') return;
+    activeQueue=fullQueue;   // manual jump always browses the full library
+    const qi=fullQueue.findIndex(q=>q.ai===parseInt(ai)&&q.type==='artist');
+    if(qi>=0){ pos=qi; showStep(pos); }
+    document.getElementById('jump-to').value='';
+}
+function startWizard(){
+    wizardQueue=[];
+    lib.artists.forEach((a,ai)=>{
+        if(!a.has_img) wizardQueue.push({type:'artist',ai});
+        a.albums.forEach((al,ali)=>{
+            if(!al.has_cover) wizardQueue.push({type:'album',ai,ali});
+        });
+    });
+    if(!wizardQueue.length){
+        hdrMsg('✓ Nothing missing — every artist and album already has art','ok');
+        setTimeout(()=>hdrMsg(''),4000);
+        return;
+    }
+    activeQueue=wizardQueue;
+    pos=0;
+    showStep(0);
+}
+function stepBack(){ if(!embedding){ pos=Math.max(0,pos-1); showStep(pos); } }
+function stepNext(){
+    if(embedding) return;
+    if(pos>=activeQueue.length-1){ showArtistList(); return; }
+    pos++; showStep(pos);
+}
+
+function updateWizBar(){
+    const step=activeQueue[pos];
+    const pct=activeQueue.length?Math.round(pos/activeQueue.length*100):0;
+    const filtered=activeQueue===wizardQueue?' (missing art)':'';
+    const label=step.type==='artist'
+        ?'Artist image: '+lib.artists[step.ai].name
+        :lib.artists[step.ai].name+' — '+lib.artists[step.ai].albums[step.ali].name;
+    setEl('wiz-label',label);
+    setEl('wiz-pos',(pos+1)+' / '+activeQueue.length+filtered);
+    document.getElementById('wiz-fill').style.width=pct+'%';
+}
+function showStep(idx){
+    if(!activeQueue.length) return;
+    updateWizBar();
+    const s=activeQueue[idx];
+    if(s.type==='artist') loadArtistStep(s.ai); else loadAlbumStep(s.ai,s.ali);
+}
+
+// ── Artist list ───────────────────────────────────────────────────────────
+function renderArtistList(){
+    const tbody=document.getElementById('artist-list-body');
+    tbody.innerHTML='';
+    let totalA=0, totalM=0;
+    lib.artists.forEach((a,ai)=>{
+        const mc=a.albums.filter(al=>!al.has_cover).length;
+        totalA+=a.albums.length; totalM+=mc;
+        const tr=document.createElement('tr');
+        tr.dataset.name=a.name.toLowerCase();
+        tr.innerHTML='<td>'+esc(a.name)+'</td>'
+            +'<td>'+(a.has_img?'<span class="ok">✓</span>':'<span class="err">✗</span>')+'</td>'
+            +'<td>'+a.albums.length+'</td>'
+            +'<td>'+(mc>0?'<span class="err">'+mc+'</span>':'<span class="ok">0</span>')+'</td>';
+        const td=document.createElement('td');
+        const btn=document.createElement('button');
+        btn.textContent='Open →';
+        btn.addEventListener('click',()=>{
+            activeQueue=fullQueue;   // opening from the list always browses the full library
+            const qi=fullQueue.findIndex(q=>q.ai===ai&&q.type==='artist');
+            pos=qi>=0?qi:0; showStep(pos);
+        });
+        td.appendChild(btn); tr.appendChild(td); tbody.appendChild(tr);
+    });
+    setEl('al-count',lib.artists.length+' artists · '+totalA+' albums · '+totalM+' missing covers');
+}
+
+function filterArtistList(q){
+    const term=q.toLowerCase().trim();
+    document.querySelectorAll('#artist-list-body tr').forEach(tr=>{
+        tr.classList.toggle('hidden-row', term.length>0 && !tr.dataset.name.includes(term));
+    });
+}
+
+// ── Artist step ───────────────────────────────────────────────────────────
+function loadArtistStep(ai){
+    curAI=ai; curALI=-1; artistSrcPg=0; artistDispPg=0; allArtistResults=[];
+    stepGen++;
+    const artist=lib.artists[ai];
+    showV('step-artist');
+    updateURL(artist,null);
+    setEl('sa-name',artist.name);
+
+    const skip=document.getElementById('sa-skip-btn');
+    skip.textContent=artist.has_img?'Done →':'Skip artist image →';
+    skip.className=artist.has_img?'done-btn':'';
+    document.getElementById('sa-continue-btn').classList.toggle('hidden',!artist.has_img);
+
+    const imgEl=document.getElementById('sa-cur');
+    const noneEl=document.getElementById('sa-none');
+    const dimEl=document.getElementById('sa-dim');
+    document.getElementById('sa-saved').classList.add('hidden');
+    dimEl.textContent='';
+
+    if(artist.has_img){
+        imgEl.src='/api/image/local?path='+enc(artist.img_path)+'&t='+Date.now();
+        imgEl.dataset.full=imgEl.src;
+        imgEl.style.display='block';
+        imgEl.onload=function(){ if(this.naturalWidth) dimEl.textContent=this.naturalWidth+'×'+this.naturalHeight+'px'; };
+        noneEl.classList.add('hidden');
+    }else{
+        imgEl.style.display='none'; noneEl.classList.remove('hidden');
+    }
+
+    document.getElementById('sa-q').value=artist.name;
+    setEl('sa-search-status','');
+    document.getElementById('sa-grid').innerHTML='';
+    document.getElementById('sa-prev').disabled=true;
+    setEl('sa-pgnum','pg 1');
+    setEl('sa-status','');
+    searchArtistImg(0);
+}
+
+async function selectArtistImg(url,isUpload){
+    setEl('sa-search-status','saving...');
+    const artist=lib.artists[curAI], gen=stepGen;   // capture: the user may navigate while saving
+    try{
+        const body={artist_path:artist.path};
+        if(isUpload) body.image_data=url; else body.image_url=url;
+        const d=await api('/api/set-artist-img',{method:'POST',body:JSON.stringify(body)});
+        artist.has_img=true; artist.img_path=d.path;
+        if(gen!==stepGen) return;   // saved fine, but a different step is on screen now
+        const imgEl=document.getElementById('sa-cur');
+        imgEl.src=d.data_url; imgEl.dataset.full=url; imgEl.style.display='block';
+        document.getElementById('sa-none').classList.add('hidden');
+        document.getElementById('sa-saved').textContent='✓ Saved as artist.jpg';
+        document.getElementById('sa-saved').classList.remove('hidden');
+        document.getElementById('sa-continue-btn').classList.remove('hidden');
+        const skip=document.getElementById('sa-skip-btn');
+        skip.textContent='Done →'; skip.className='done-btn';
+        setEl('sa-search-status','');
+    }catch(e){ if(gen===stepGen) setEl('sa-search-status','! '+e.message); }
+}
+
+// ── Album step ────────────────────────────────────────────────────────────
+async function loadAlbumStep(ai,ali){
+    curAI=ai; curALI=ali; albumSrcPg=0; albumDispPg=0; allAlbumResults=[]; embedding=false;
+    const gen=++stepGen;
+    const artist=lib.artists[ai], album=artist.albums[ali];
+    showV('step-album');
+    updateURL(artist,album);
+
+    document.getElementById('alb-prog').classList.add('hidden');
+    document.getElementById('alb-done').classList.add('hidden');
+    document.getElementById('alb-grid').innerHTML='';
+    setEl('alb-search-status','');
+
+    setEl('alb-artist-name',artist.name);
+    setEl('alb-name',album.name);
+    setEl('alb-badge',album.is_multi_disc?album.disc_info.length+' discs · '+album.total_tracks+' tracks':album.total_tracks+' tracks');
+
+    const skip=document.getElementById('alb-skip-btn');
+    skip.textContent=album.has_cover?'Done →':'Skip →';
+    skip.className=album.has_cover?'done-btn':'';
+
+    const covImg=document.getElementById('alb-cover-img');
+    const covNone=document.getElementById('alb-cover-none');
+    const keepBtn=document.getElementById('alb-keep-btn');
+    const covInfo=document.getElementById('alb-cover-info');
+
+    if(album.has_cover&&album.cover_path){
+        covImg.src='/api/image/local?path='+enc(album.cover_path)+'&t='+Date.now();
+        covImg.dataset.full=covImg.src;
+        covImg.style.display='block'; covNone.style.display='none';
+        const fname=album.cover_path.split(/[\\/]/).pop();
+        covInfo.textContent=fname;
+        // naturalWidth/naturalHeight gives actual file dimensions (not display dimensions)
+        covImg.onload=function(){
+            if(this.naturalWidth) covInfo.textContent=fname+' · '+this.naturalWidth+'×'+this.naturalHeight+'px';
+        };
+        keepBtn.classList.remove('hidden');
+    }else{
+        covImg.style.display='none'; covNone.style.display='flex';
+        covInfo.textContent=''; keepBtn.classList.add('hidden');
+    }
+
+    renderDiscInfo(album,false);
+
+    const embStatus=document.getElementById('alb-emb-status');
+    const embThumb=document.getElementById('alb-emb-thumb');
+    const useEmbBtn=document.getElementById('alb-use-emb-btn');
+    const embDim=document.getElementById('alb-emb-dim');
+    embStatus.innerHTML='<span class="spinner"></span> checking...';
+    embThumb.style.display='none'; useEmbBtn.classList.add('hidden'); embDim.textContent='';
+
+    api('/api/image/embedded?path='+enc(album.path)+'&disc_info='+enc(JSON.stringify(album.disc_info))).then(emb=>{
+        if(gen!==stepGen) return;
+        if(emb.has_art){
+            embThumb.src=emb.data_url; embThumb.dataset.full=emb.data_url; embThumb.style.display='block';
+            embThumb.onload=function(){ if(this.naturalWidth) embDim.textContent=this.naturalWidth+'×'+this.naturalHeight+'px'; };
+            embStatus.textContent='Found embedded art';
+            useEmbBtn.classList.remove('hidden');
+        }else{ embStatus.textContent='No embedded art in tracks'; }
+    }).catch(()=>{ if(gen===stepGen) embStatus.textContent='Could not check'; });
+
+    document.getElementById('alb-aq').value=artist.name;
+    document.getElementById('alb-alq').value=album.name;
+    document.getElementById('alb-prev').disabled=true;
+    setEl('alb-pgnum','pg 1');
+
+    setEl('alb-track-count','');
+    document.getElementById('alb-tracks').innerHTML='<div style="padding:8px;color:#888"><span class="spinner"></span> loading...</div>';
+    api('/api/album-tracks?path='+enc(album.path)).then(data=>{
+        if(gen===stepGen) renderTrackList(data,Date.now());
+    }).catch(()=>{
+        if(gen===stepGen) document.getElementById('alb-tracks').textContent='Could not read tracks';
+    });
+
+    searchAlbumArt(0);
+}
+
+function renderDiscInfo(album,allCovered){
+    const el=document.getElementById('alb-disc-covers');
+    if(!album.is_multi_disc){ el.innerHTML=''; return; }
+    el.innerHTML=album.disc_info.map(d=>{
+        const ok=allCovered||d.has_cover;
+        const note=allCovered&&!d.has_cover?' <span class="note">(album root)</span>':'';
+        return '<div class="disc-info-row">'+(ok?'<span class="ok">✓</span>':'<span class="err">✗</span>')+'<span>'+esc(d.name||'disc')+'</span>'+note+'</div>';
+    }).join('');
+}
+
+// ── Artist image search — paginated, sorted ──────────────────────────────────
+
+function renderArtistPage(){
+    const sorted=allArtistResults;
+    const total=sorted.length;
+    const start=artistDispPg*ARTIST_PG_SIZE;
+    const page=sorted.slice(start,start+ARTIST_PG_SIZE);
+    renderGrid('sa-grid',page,url=>selectArtistImg(url));
+    document.getElementById('sa-prev').disabled=artistDispPg===0;
+    document.getElementById('sa-next').disabled=(start+ARTIST_PG_SIZE)>=total;
+    setEl('sa-pgnum',total?(start+1)+'–'+Math.min(start+ARTIST_PG_SIZE,total)+' of '+total:'');
+}
+function artDispPrev(){ if(artistDispPg>0){artistDispPg--;renderArtistPage();} }
+function artDispNext(){ artistDispPg++;renderArtistPage(); }
+
+async function searchArtistImg(pg){
+    const q=document.getElementById('sa-q').value.trim();
+    if(!q) return;
+    artistSrcPg=Math.max(0,pg);
+    // A new search (page 0) supersedes any in flight; "Load more" continues the current one.
+    const gen=artistSrcPg===0?++artistSearchGen:artistSearchGen;
+    if(artistSrcPg===0){
+        allArtistResults=[]; artistDispPg=0;
+        document.getElementById('sa-grid').innerHTML=
+            '<div class="note" style="padding:10px"><span class="spinner"></span> searching...</div>';
+        document.getElementById('sa-load-more').classList.add('hidden');
+    }
+    setEl('sa-search-status','');
+    try{
+        const d=await api('/api/search/artist?name='+enc(q)+'&page='+artistSrcPg);
+        if(gen!==artistSearchGen) return;   // late response for a previous artist/query
+        allArtistResults.push(..._mergeIn(allArtistResults,d.results));
+        renderArtistPage();
+        setEl('sa-search-status',allArtistResults.length?allArtistResults.length+' results':'');
+        renderSources('sa-sources',d.sources);
+        if(allArtistResults.length===0)
+            document.getElementById('sa-grid').innerHTML='<div class="note" style="padding:6px">No results.</div>';
+        if(d.results.length>=10) document.getElementById('sa-load-more').classList.remove('hidden');
+    }catch(e){ if(gen===artistSearchGen) setEl('sa-search-status','! '+e.message); }
+}
+
+// ── Album art search — paginated, progressive (fast then slow phase) ───────
+function renderAlbumPage(){
+    const sorted=allAlbumResults;
+    const total=sorted.length;
+    const start=albumDispPg*ALBUM_PG_SIZE;
+    const page=sorted.slice(start,start+ALBUM_PG_SIZE);
+    renderGrid('alb-grid',page,url=>doEmbed('url',url));
+    document.getElementById('alb-prev').disabled=albumDispPg===0;
+    document.getElementById('alb-next').disabled=(start+ALBUM_PG_SIZE)>=total;
+    setEl('alb-pgnum',total?(start+1)+'–'+Math.min(start+ALBUM_PG_SIZE,total)+' of '+total:'');
+}
+function albDispPrev(){ if(albumDispPg>0){albumDispPg--;renderAlbumPage();} }
+function albDispNext(){ albumDispPg++;renderAlbumPage(); }
+
+function _mergeIn(existing,incoming){
+    const seen=new Set(existing.map(r=>r.url));
+    return incoming.filter(r=>r.url&&!seen.has(r.url));
+}
+
+async function searchAlbumArt(pg){
+    albumSrcPg=Math.max(0,pg);
+    const gen=albumSrcPg===0?++albumSearchGen:albumSearchGen;
+    const artist=document.getElementById('alb-aq').value.trim();
+    const album=document.getElementById('alb-alq').value.trim();
+
+    if(albumSrcPg===0){
+        allAlbumResults=[]; albumDispPg=0;
+        // Show spinner while loading (not "no results")
+        document.getElementById('alb-grid').innerHTML=
+            '<div class="note" style="padding:10px"><span class="spinner"></span> searching...</div>';
+        document.getElementById('alb-load-more').classList.add('hidden');
+    }
+    setEl('alb-search-status','');
+
+    try{
+        // Phase 1: fast official sources (iTunes, Deezer, Discogs) — ~1-2s
+        const fast=await api('/api/search/album/fast?artist='+enc(artist)+'&album='+enc(album)+'&page='+albumSrcPg);
+        if(gen!==albumSearchGen) return;
+        allAlbumResults.push(..._mergeIn(allAlbumResults,fast.results));
+        renderAlbumPage();
+        setEl('alb-search-status', allAlbumResults.length+' results'+(albumSrcPg===0?' · loading CAA + web...':''));
+        renderSources('alb-sources',fast.sources,albumSrcPg===0);
+
+        // Phase 2: slow sources — official ones (CAA) prepended, web results appended. First page only.
+        if(albumSrcPg===0){
+            const slow=await api('/api/search/album/slow?artist='+enc(artist)+'&album='+enc(album));
+            if(gen!==albumSearchGen) return;   // slow phase can take many seconds — often stale
+            const front=_mergeIn(allAlbumResults, slow.results.filter(r=>!r.web));
+            const back =_mergeIn([...front,...allAlbumResults], slow.results.filter(r=>r.web));
+            allAlbumResults=[...front,...allAlbumResults,...back];
+            renderAlbumPage();
+            setEl('alb-search-status',allAlbumResults.length+' results');
+            renderSources('alb-sources',[...fast.sources,...slow.sources],false);
+            if(fast.results.length>=6) document.getElementById('alb-load-more').classList.remove('hidden');
+        }
+        if(allAlbumResults.length===0)
+            document.getElementById('alb-grid').innerHTML='<div class="note" style="padding:6px">No results.</div>';
+    }catch(e){ if(gen===albumSearchGen) setEl('alb-search-status','! '+e.message); }
+}
+
+// ── Embed flow ────────────────────────────────────────────────────────────
+async function doEmbed(source,imageUrl){
+    if(embedding) return;
+    embedding=true;
+    const album=lib.artists[curAI].albums[curALI], gen=stepGen;
+    document.getElementById('alb-keep-btn').disabled=true;
+    document.getElementById('alb-use-emb-btn').disabled=true;
+
+    const prog=document.getElementById('alb-prog');
+    prog.classList.remove('hidden');
+    document.getElementById('alb-done').classList.add('hidden');
+    document.getElementById('alb-prog-bar').style.width='0%';
+    document.getElementById('alb-prog-bar').textContent='0%';
+    setEl('alb-prog-lbl','downloading / reading image...');
+    setEl('alb-prog-file','');
+
+    const body={album_path:album.path,disc_info:album.disc_info,source};
+    if(source==='url') body.image_url=imageUrl;
+    if(source==='cover_file') body.cover_path=album.cover_path;
+    if(source==='upload') body.image_data=imageUrl;
+
+    try{
+        const d=await api('/api/prepare-embed',{method:'POST',body:JSON.stringify(body)});
+        if(d.cover_path){ album.cover_path=d.cover_path; album.cover_in_root=true; }
+        if(gen===stepGen){
+            document.getElementById('alb-prog-thumb').src=d.data_url;
+            setEl('alb-prog-lbl','embedding '+d.total_tracks+' tracks...');
+        }
+        startSSE(d.embed_id,album,gen);
+    }catch(e){
+        embedding=false;
+        if(gen!==stepGen){ alert('Error embedding '+album.name+': '+e.message); return; }
+        prog.classList.add('hidden');
+        document.getElementById('alb-keep-btn').disabled=false;
+        document.getElementById('alb-use-emb-btn').disabled=false;
+        alert('Error: '+e.message);
+    }
+}
+
+function startSSE(embedId,album,gen){
+    // Progress only touches the screen while this album is still shown; the
+    // job itself keeps running on the server either way.
+    const onScreen=()=>gen===stepGen;
+    const bar=document.getElementById('alb-prog-bar');
+    const lbl=document.getElementById('alb-prog-lbl');
+    const file=document.getElementById('alb-prog-file');
+    const es=new EventSource('/api/embed/'+embedId);
+    es.onmessage=ev=>{
+        const d=JSON.parse(ev.data);
+        if(d.status==='start'){ if(onScreen()) lbl.textContent='0 / '+d.total+' tracks'; }
+        else if(d.status==='progress'){ if(onScreen()){ bar.style.width=d.pct+'%'; bar.textContent=d.pct+'%'; lbl.textContent=d.current+' / '+d.total+' tracks'; file.textContent=d.file; } }
+        else if(d.status==='done'){ es.close(); onEmbedDone(d.errors,album,gen); }
+        else if(d.status==='error'){ es.close(); embedding=false; alert('Embedding error: '+d.message); }
+    };
+    es.onerror=()=>{ es.close(); embedding=false; alert('Connection lost during embedding of '+album.name+'.'); };
+}
+
+function onEmbedDone(errors,al,gen){
+    embedding=false;     // the job is over, whatever is on screen now
+    al.has_cover=true;   // the album that was embedded, even if the user has navigated elsewhere
+    if(gen!==stepGen) return;
+    document.getElementById('alb-prog-bar').style.width='100%';
+    document.getElementById('alb-prog-bar').textContent='100%';
+
+    if(al.cover_path){
+        const ci=document.getElementById('alb-cover-img');
+        ci.src='/api/image/local?path='+enc(al.cover_path)+'&t='+Date.now();
+        ci.dataset.full=ci.src; ci.style.display='block';
+        document.getElementById('alb-cover-none').style.display='none';
+        document.getElementById('alb-keep-btn').classList.remove('hidden');
+    }
+    renderDiscInfo(al,true);
+    const skip=document.getElementById('alb-skip-btn');
+    skip.textContent='Done →'; skip.className='done-btn';
+
+    const done=document.getElementById('alb-done');
+    done.classList.remove('hidden');
+    setEl('alb-done-txt','✓ Embedded into all '+al.total_tracks+' tracks  ');
+    setEl('alb-done-err',errors&&errors.length?'⚠ '+errors.length+' track'+(errors.length>1?'s':'')+' had errors':'');
+
+    document.getElementById('alb-keep-btn').disabled=false;
+    document.getElementById('alb-use-emb-btn').disabled=false;
+    api('/api/album-tracks?path='+enc(al.path)).then(data=>{ if(gen===stepGen) renderTrackList(data,Date.now()); }).catch(()=>{});
+
+    // Reload embedded art thumbnail — it changes after embedding
+    api('/api/image/embedded?path='+enc(al.path)+'&disc_info='+enc(JSON.stringify(al.disc_info))).then(emb=>{
+        if(gen!==stepGen) return;
+        const th=document.getElementById('alb-emb-thumb');
+        const st=document.getElementById('alb-emb-status');
+        const dm=document.getElementById('alb-emb-dim');
+        if(emb.has_art){
+            th.src=emb.data_url; th.dataset.full=emb.data_url; th.style.display='block';
+            th.onload=function(){ if(this.naturalWidth) dm.textContent=this.naturalWidth+'×'+this.naturalHeight+'px'; };
+            st.textContent='Embedded art'; st.style.display='';
+            document.getElementById('alb-use-emb-btn').classList.remove('hidden');
+        }
+    }).catch(()=>{});
+}
+
+// ── Track list ────────────────────────────────────────────────────────────
+function renderTrackList(data,ts){
+    setEl('alb-track-count','('+data.total+')');
+    const box=document.getElementById('alb-tracks');
+    box.innerHTML='';
+    data.groups.forEach(g=>{
+        if(g.disc_name){
+            const h=document.createElement('div'); h.className='disc-grp-hdr';
+            h.textContent=g.disc_name; box.appendChild(h);
+        }
+        g.tracks.forEach(t=>{
+            const row=document.createElement('div'); row.className='track-row';
+            const num=t.track_num?String(parseInt(t.track_num)).padStart(2,'0'):'–';
+            const numEl=document.createElement('span'); numEl.className='track-num'; numEl.textContent=num;
+            let artEl;
+            if(t.has_art){
+                artEl=document.createElement('img'); artEl.className='track-art';
+                const au='/api/track-art?file='+enc(t.path)+'&t='+ts;
+                artEl.src=au; artEl.dataset.full=au; artEl.alt='';
+                artEl.onerror=()=>{ artEl.style.display='none'; };
+            }else{
+                artEl=document.createElement('div'); artEl.className='track-noart'; artEl.textContent='·';
+            }
+            const titleEl=document.createElement('span'); titleEl.className='track-title';
+            titleEl.textContent=t.title||t.filename; titleEl.title=t.filename;
+            row.appendChild(numEl); row.appendChild(artEl); row.appendChild(titleEl);
+            box.appendChild(row);
+        });
+    });
+}
+
+// ── Missing report ────────────────────────────────────────────────────────
+function showMissing(){
+    showV('v-missing');
+    if(!lib){ document.getElementById('missing-body').innerHTML='<p class="note">No library loaded yet.</p>'; return; }
+    const noImg=lib.artists.filter(a=>!a.has_img).map(a=>a.name);
+    const noCover=[];
+    lib.artists.forEach(a=>a.albums.forEach(al=>{ if(!al.has_cover) noCover.push(a.name+' — '+al.name); }));
+    let html='';
+    html+='<div class="miss-section"><h3>Artists without artist.jpg ('+noImg.length+')</h3>';
+    if(!noImg.length) html+='<p class="ok note">All artists have an image.</p>';
+    else noImg.forEach(n=>{ html+='<div class="miss-item">'+esc(n)+'</div>'; });
+    html+='</div>';
+    html+='<div class="miss-section"><h3>Albums without cover.jpg ('+noCover.length+')</h3>';
+    if(!noCover.length) html+='<p class="ok note">All albums have a cover.</p>';
+    else noCover.forEach(s=>{ html+='<div class="miss-item">'+esc(s)+'</div>'; });
+    html+='</div>';
+    document.getElementById('missing-body').innerHTML=html;
+}
+
+// ── Grid renderers ────────────────────────────────────────────────────────
+function makeCell(r, onSelect){
+    const cell=document.createElement('div'); cell.className='img-cell'; cell.dataset.full=r.url; cell.dataset.quality=r.quality||'';
+    const img=document.createElement('img'); img.src=r.thumb; img.alt=r.label; img.loading='lazy';
+    img.onerror=()=>{ cell.style.display='none'; };
+    const lbl=document.createElement('div'); lbl.className='img-cell-lbl';
+    lbl.innerHTML='<span class="lbl-source">'+esc(r.source)+'</span><br><span style="color:#777">'+esc((r.label||'').slice(0,55))+'</span>';
+    cell.appendChild(img); cell.appendChild(lbl);
+    cell.addEventListener('click',()=>{
+        document.querySelectorAll('#alb-grid .img-cell, #sa-grid .img-cell').forEach(c=>c.classList.remove('sel'));
+        cell.classList.add('sel'); onSelect(r.url);
+    });
+    return cell;
+}
+
+function renderGrid(containerId, results, onSelect){
+    const box=document.getElementById(containerId);
+    box.innerHTML='';
+    if(!results.length){ box.innerHTML='<div class="note" style="padding:6px">No results.</div>'; return; }
+    results.forEach(r=>box.appendChild(makeCell(r,onSelect)));
+}
+
+// ── Sources indicator ─────────────────────────────────────────────────────
+function renderSources(elId, sources, loadingMore){
+    // sources: [{label, status: ok|unavailable|disabled, count, message?, hint?}] from the server
+    const el=document.getElementById(elId);
+    const parts=(sources||[]).map(src=>{
+        let cls, txt=esc(src.label), tip=src.hint||'';
+        if(src.status==='ok'){
+            cls=src.count>0?'src-on':'src-off';
+            txt+=' <span class="src-cnt">('+src.count+')</span>';
+        }else if(src.status==='unavailable'){
+            cls='src-unavail';
+            txt+=' <span class="src-cnt">(unavailable)</span>';
+            tip=(src.message||'unavailable')+(tip?' — '+tip:'');
+        }else{
+            cls='src-off'; tip=tip||'disabled in Settings';
+        }
+        return '<span class="'+cls+'" title="'+esc(tip).replace(/"/g,'&quot;')+'">'+txt+'</span>';
+    });
+    el.innerHTML='Sources: '+parts.join(' · ')+(loadingMore?' <span class="src-loading">(loading more...)</span>':'');
+}
+
+function useUrlForArtist(){
+    const url=document.getElementById('sa-url-input').value.trim();
+    if(url) selectArtistImg(url);
+}
+function useUrlForAlbum(){
+    const url=document.getElementById('alb-url-input').value.trim();
+    if(url) doEmbed('url',url);
+}
+
+function _readImageFile(input,onData){
+    const file=input.files[0];
+    if(!file) return;
+    if(!/^image\/(jpeg|png)$/.test(file.type)){
+        alert('Please choose a JPEG or PNG image.');
+        input.value='';
+        return;
+    }
+    const reader=new FileReader();
+    reader.onload=()=>onData(reader.result);
+    reader.onerror=()=>alert('Could not read that file.');
+    reader.readAsDataURL(file);
+    input.value='';   // reset so picking the same file again still fires 'change'
+}
+function handleArtistUpload(input){ _readImageFile(input,dataUrl=>selectArtistImg(dataUrl,true)); }
+function handleAlbumUpload(input){ _readImageFile(input,dataUrl=>doEmbed('upload',dataUrl)); }
+
+// ── Utilities ──────────────────────────────────────────────────────────────
+function enc(s){ return encodeURIComponent(String(s)); }
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+(async()=>{
+    await loadCfg();
+    // Use server-side cache first — avoids rescan on page refresh
+    try{
+        const cached=await api('/api/library');
+        if(cached.artists&&cached.artists.length){
+            applyLibrary(cached);
+            if(!navigateFromURL()){ renderArtistList(); showV('v-artists'); }
+            return;
+        }
+    }catch(_){}
+    // No cache — auto-scan if path is configured
+    const root=document.getElementById('inp-root').value.trim();
+    if(root) await doScan(false); else showV('v-setup');
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "art-manager"
+dynamic = ["version"]
+description = "Local web tool for curating artist images, cover.jpg files and embedded FLAC artwork — local, SMB or WebDAV libraries"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Geekshere" }]
+keywords = ["flac", "cover art", "album art", "music library", "smb", "webdav"]
+classifiers = [
+    "Environment :: Web Environment",
+    "Framework :: Flask",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+dependencies = [
+    "flask>=2.3",
+    "mutagen>=1.47",
+    "requests>=2.31",
+    "smbprotocol>=1.13",
+    "ddgs>=9.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "wsgidav>=4.3", "cheroot>=10"]
+
+[project.scripts]
+art-manager = "art_manager.server:main"
+
+[project.urls]
+Homepage = "https://github.com/Geekshere/art-manager"
+Issues = "https://github.com/Geekshere/art-manager/issues"
+
+[tool.setuptools]
+packages = ["art_manager"]
+
+[tool.setuptools.package-data]
+art_manager = ["templates/*.html"]
+
+[tool.setuptools.dynamic]
+version = { attr = "art_manager.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

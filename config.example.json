@@ -1,0 +1,11 @@
+{
+  "library_root": "smb://nas.local/Media/Music",
+  "storage_username": "myuser",
+  "storage_password": "",
+  "smb_port": 445,
+  "fanart_key": "",
+  "discogs_token": "",
+  "web_search": true,
+  "ignored_folders": [".[!.]*", "@eaDir", "#recycle", "@Recycle", "$RECYCLE.BIN",
+                      "System Volume Information", "!Playlists"]
+}

@@ -1,0 +1,19 @@
+# Copy to compose.yaml and adjust. The library is mounted read-write because
+# the app writes cover.jpg / artist.jpg and embeds artwork into FLAC files.
+services:
+  art-manager:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - /path/to/Music:/music          # your library (or use an smb:// / webdavs:// root instead)
+      - art-manager-data:/data         # config.json + scan cache
+    environment:
+      ARTMGR_PASSWORD: "choose-one"    # the container listens on all interfaces — set a password
+      # ARTMGR_STORAGE_USERNAME: myuser  # for an smb:// or webdavs:// library root
+      # ARTMGR_STORAGE_PASSWORD: ...
+    command: ["/music"]
+    user: "1000:1000"                  # match the owner of your music files
+    restart: unless-stopped
+volumes:
+  art-manager-data:

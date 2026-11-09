@@ -1,0 +1,18 @@
+# local state / secrets — never commit
+config.json
+library_cache.json
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# build / test output
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+compose.yaml
+
+# node (browser tests)
+node_modules/
