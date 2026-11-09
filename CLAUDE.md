@@ -35,7 +35,9 @@ Python and every dependency. `.github/workflows/release.yml` builds it on
 Windows, macOS (arm64) and Linux (ubuntu-22.04 for an older glibc), smoke-tests
 each binary, and on a `v*` tag publishes a GitHub Release with
 `packaging/RELEASE_NOTES.md`. To release: bump `art_manager/__init__.py`,
-commit, `git tag vX.Y.Z && git push origin vX.Y.Z`. The frozen app
+commit and push, then either push a `vX.Y.Z` tag, or in the Actions tab run
+"Release apps" with **publish** ticked, which creates the tag for that
+version itself. The frozen app
 (`sys.frozen`) opens the browser on start and stores settings in the per-user
 config dir. Local build: `pyinstaller packaging/art-manager.spec`.
 
