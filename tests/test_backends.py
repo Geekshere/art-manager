@@ -237,7 +237,7 @@ def test_connection_test_endpoint(client, backend):
     _, url = backend
     r = client.get('/api/test-connection', query_string={'root': url}).json
     assert r['ok'] is True, r
-    assert '4 folder' in r['msg']   # Alpha, !!!, 100% Orange Juice, !Playlists
+    assert '3 folder' in r['msg']   # Alpha, !!!, 100% Orange Juice (!Playlists is ignored)
 
 def test_bad_credentials_reported(client, backend):
     _, url = backend
@@ -255,3 +255,14 @@ def test_folder_browser_through_backend(client, backend):
     assert [x['name'] for x in d['dirs']] == ['!!!', '!Playlists', '100% Orange Juice', 'Alpha']
     sub = client.get('/api/browse', query_string={'path': d['dirs'][-1]['path']}).json
     assert {x['name'] for x in sub['dirs']} == {'First', 'Second', 'Album #1'}
+
+def test_file_check_through_backend(client, backend):
+    from art_manager import check
+    root, url = backend
+    lib = _scan(client, url)
+    al = _album(lib, 'Alpha', 'First')
+    r = client.post('/api/check-album', json={'name': al['name'], 'path': al['path'], 'disc_info': al['disc_info']}).json
+    flacs = [f for f in r['files'] if f['kind'] == 'flac']
+    assert len(flacs) == 2
+    for f in flacs:   # silent fixture tracks: valid audio, just untagged / no art
+        assert not [i for i in f['issues'] if i['level'] == 'error'], f

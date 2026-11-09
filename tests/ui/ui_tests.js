@@ -233,7 +233,7 @@ const gridLabels = (page, id) => page.$$eval(`#${id} .img-cell img`, els => els.
     await page.click('text=Save & scan library');
     await page.waitForSelector('#v-artists:not(.hidden)', { timeout: 10000 });
     const n = await page.$$eval('#artist-list-body tr', r => r.length);
-    check(n === 4, `library scanned after setup (${n} artists)`);
+    check(n === 3, `library scanned after setup (${n} artists)`);
     await page.close();
   }
 

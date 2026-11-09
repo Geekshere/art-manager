@@ -48,8 +48,10 @@ def test_access_settings_saved(client):
 
 def test_command_line_values_are_remembered(client, monkeypatch):
     monkeypatch.delenv('ARTMGR_HOST', raising=False); monkeypatch.delenv('ARTMGR_PORT', raising=False)
+    with socket.socket() as t:
+        t.bind(('127.0.0.1', 0)); free = t.getsockname()[1]
     host, port, wanted, _ = server.prepare(['smb://nas.local/Media/Music', '--user', 'myuser',
-                                            '--pass', 'pw', '--port', '0', '--no-browser'])
+                                            '--pass', 'pw', '--port', str(free), '--no-browser'])
     with open(config.CFG_FILE) as f:
         saved = json.load(f)
     assert saved['library_root'] == 'smb://nas.local/Media/Music'
@@ -71,3 +73,48 @@ def test_saved_allow_network_used_and_busy_port_skipped(client, monkeypatch):
     client.post('/api/config', json={'allow_network': True})
     host, *_ = server.prepare(['--no-browser'])
     assert host == '0.0.0.0'
+
+
+def test_bad_port_rejected_clearly(client, capsys):
+    with pytest.raises(SystemExit):
+        server.prepare(['--port', '70000'])
+    assert 'between 1 and 65535' in capsys.readouterr().err
+
+def test_ping_needs_no_password(client):
+    server._auth['password'] = 'secret'
+    assert client.get('/api/config').status_code == 401
+    r = client.get('/api/ping')
+    assert r.status_code == 200 and r.json['app'] == 'art-manager'
+
+def test_quit_requires_json_and_exits(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(server.threading, 'Timer', lambda t, fn: type('T', (), {'start': lambda self: calls.append(t)})())
+    assert client.post('/api/quit', data='x').status_code == 400   # plain form post: refused
+    assert calls == []
+    assert client.post('/api/quit', json={}).json == {'ok': True}
+    assert calls == [0.5]
+
+def test_detects_running_instance(client):
+    """A second launch finds the first one through /api/ping."""
+    import threading
+    from werkzeug.serving import make_server
+    srv = make_server('127.0.0.1', 0, server.app)
+    t = threading.Thread(target=srv.serve_forever, daemon=True); t.start()
+    try:
+        assert server._art_manager_at(srv.server_port) is True
+    finally:
+        srv.shutdown()
+    with socket.socket() as s2:
+        s2.bind(('127.0.0.1', 0)); s2.listen()
+        assert server._art_manager_at(s2.getsockname()[1]) is False   # something else on that port
+
+def test_frozen_linux_child_env_restored(monkeypatch):
+    monkeypatch.setattr(server.sys, 'frozen', True, raising=False)
+    monkeypatch.setattr(server.sys, 'platform', 'linux')
+    monkeypatch.setenv('LD_LIBRARY_PATH', '/tmp/_MEIxyz')
+    monkeypatch.setenv('LD_LIBRARY_PATH_ORIG', '/usr/local/lib')
+    server._fix_child_env()
+    assert os.environ['LD_LIBRARY_PATH'] == '/usr/local/lib'
+    monkeypatch.setenv('LD_LIBRARY_PATH', '/tmp/_MEIxyz')
+    server._fix_child_env()                      # no original value: remove it entirely
+    assert 'LD_LIBRARY_PATH' not in os.environ

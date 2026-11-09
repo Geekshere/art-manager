@@ -22,8 +22,8 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
           cache-dependency-path: requirements-dev.txt
-      - name: System packages (ffmpeg for fixtures, Samba for SMB integration tests)
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg samba
+      - name: System packages (ffmpeg for fixtures, Samba for SMB tests, flac for the full-decode check)
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg samba flac
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

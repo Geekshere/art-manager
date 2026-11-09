@@ -97,10 +97,16 @@ def _flac_count(files):
     return sum(1 for f in files if f.lower().endswith('.flac'))
 
 
-def scan_library(root, prev_artists=None, errors=None):
-    """Return the list of artists under root. Unreadable folders are appended to errors."""
+def scan_library(root, prev_artists=None, errors=None, skipped=None):
+    """
+    Return the list of artists under root. Unreadable folders are appended to
+    errors. Top-level folders that hold no album at all (playlists, scans,
+    downloads...) are left out and their names appended to skipped.
+    """
     if errors is None:
         errors = []
+    if skipped is None:
+        skipped = []
     _, root_dirs = list_dir(root)   # root unreadable -> raise
     if not root_dirs:
         return []
@@ -124,7 +130,16 @@ def scan_library(root, prev_artists=None, errors=None):
 
     names = sorted(root_dirs)
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(names))) as ex:
-        return [a for a in ex.map(scan_one, names) if a is not None]
+        results = list(ex.map(scan_one, names))
+    out = []
+    for name, a in zip(names, results):
+        if a is None:
+            continue
+        if not a['albums'] and not a.get('dirty'):
+            skipped.append(name)
+            continue
+        out.append(a)
+    return out
 
 
 def _tree_unchanged(artist_path, cached, a_dirs):

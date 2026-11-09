@@ -23,12 +23,17 @@ def bump(path):
     os.utime(path, (t, t))
 
 def ndirs(root):
-    return sum(1 for _ in os.walk(root))
+    """Directories the scanner lists: everything except ignored folders and their contents."""
+    n = 0
+    for _, dirs, _ in os.walk(root):
+        dirs[:] = [d for d in dirs if not config.is_ignored(d)]
+        n += 1
+    return n
 
 def test_full_scan_shapes(client, make_library):
     root = make_library()
     lib = do_scan(client, root)
-    assert names(lib) == ['!!!', '!Playlists', '100% Orange Juice', 'Alpha']   # not ignored by default
+    assert names(lib) == ['!!!', '100% Orange Juice', 'Alpha']   # !Playlists ignored by default
     assert lib['errors'] == []
     a = artist(lib, 'Alpha')
     assert a['has_img'] and 'tree' not in a and 'fp' not in a   # internal fields not sent
@@ -83,7 +88,7 @@ def test_warm_scan_reuses_cache_cheaply(client, make_library, fake):
     fake.calls.clear()
     do_scan(client, froot)
     # root + one listing per artist + one per folder without direct tracks (the multi-disc album)
-    artists = [d for d in os.listdir(root)]
+    artists = [d for d in os.listdir(root) if not config.is_ignored(d)]
     assert len(fake.calls) == 1 + len(artists) + 1
     assert froot + '/Alpha/First' not in fake.calls   # album folders themselves are not re-listed
 
@@ -229,5 +234,36 @@ def test_default_ignore_list(client):
     assert config.is_ignored('.AppleDouble') and config.is_ignored('#RECYCLE')
     assert config.is_ignored('System Volume Information') and config.is_ignored('$Recycle.Bin')
     assert not config.is_ignored('...And You Will Know Us by the Trail of Dead')
-    assert not config.is_ignored('!Playlists')   # owner's choice, not hard-coded
+    assert config.is_ignored('!Playlists') and config.is_ignored('!playlists')
     assert client.get('/api/config').json['ignored_folders'] == config.DEFAULT_IGNORED
+
+def test_folders_without_albums_are_skipped_and_reported(client, make_library):
+    root = make_library()
+    (root / 'Scans').mkdir()
+    (root / 'Scans' / 'booklet.jpg').write_bytes(JPEG_BYTES)
+    (root / 'Playlists').mkdir()
+    (root / 'Playlists' / 'mix.m3u').write_text('#EXTM3U')
+    lib = do_scan(client, root)
+    assert 'Scans' not in names(lib) and 'Playlists' not in names(lib)
+    assert lib['skipped'] == ['Playlists', 'Scans']
+
+def test_old_saved_ignore_list_gets_playlists_once(client):
+    import json
+    with open(config.CFG_FILE, 'w') as f:
+        json.dump({'ignored_folders': ['@eaDir', 'Junk']}, f)
+    config.load_cfg()
+    assert config.cfg['ignored_folders'] == ['@eaDir', 'Junk', '!Playlists']
+    # removing it again is respected: the migration runs only once
+    client.post('/api/config', json={'ignored_folders': ['@eaDir']})
+    config.cfg.clear(); config.cfg.update(config.DEFAULTS)
+    config.load_cfg()
+    assert config.cfg['ignored_folders'] == ['@eaDir']
+
+def test_portable_mode_uses_folder_next_to_app(tmp_path, monkeypatch):
+    import sys
+    portable = tmp_path / 'art-manager-data'
+    portable.mkdir()
+    monkeypatch.delenv('ARTMGR_DATA_DIR', raising=False)
+    monkeypatch.setattr(sys, 'frozen', True, raising=False)
+    monkeypatch.setattr(sys, 'executable', str(tmp_path / 'art-manager.exe'))
+    assert config._default_data_dir() == str(portable)

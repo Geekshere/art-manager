@@ -4,14 +4,25 @@ from urllib.parse import urlsplit, unquote
 
 def _default_data_dir():
     """
-    Where config.json / library_cache.json live:
+    Where config.json / library_cache.json live (all of these persist across
+    restarts and app updates):
       1. ARTMGR_DATA_DIR if set (Docker image, UI tests);
-      2. a source checkout: the repo root, next to app.py (as before);
-      3. a pip install: the per-user config dir (~/.config/art-manager,
-         %APPDATA%\\art-manager on Windows).
+      2. standalone app in "portable mode": a folder named art-manager-data
+         next to the program file is used if it exists (settings travel with
+         the app, e.g. on a USB stick);
+      3. a source checkout: the repo root, next to app.py;
+      4. otherwise the per-user settings folder: %APPDATA%\\art-manager
+         (Windows), ~/Library/Application Support/Art Manager (macOS),
+         ~/.config/art-manager (Linux).
     """
     if os.environ.get('ARTMGR_DATA_DIR'):
-        return os.environ['ARTMGR_DATA_DIR']
+        d = os.environ['ARTMGR_DATA_DIR']
+        os.makedirs(d, exist_ok=True)
+        return d
+    if getattr(sys, 'frozen', False):
+        portable = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), 'art-manager-data')
+        if os.path.isdir(portable) and os.access(portable, os.W_OK):
+            return portable
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if not getattr(sys, 'frozen', False) and os.path.exists(os.path.join(repo, 'app.py')):
         return repo
@@ -40,6 +51,7 @@ DEFAULTS = {
     'allow_network': False,    # False = this computer only (127.0.0.1)
     'port': 5000,
     'app_password_hash': '',   # PBKDF2 hash of the optional app password; never the password itself
+    'settings_version': 2,     # bumped when a migration in _migrate() must run once
 }
 cfg = dict(DEFAULTS)   # the one live settings dict; mutate it, never rebind it
 
@@ -48,7 +60,7 @@ cfg = dict(DEFAULTS)   # the one live settings dict; mutate it, never rebind it
 # removed. '.[!.]*' rather than '.*' so names like "...And You Will Know Us by
 # the Trail of Dead" are not hidden, while .AppleDouble etc. are.
 DEFAULT_IGNORED = ['.[!.]*', '@eaDir', '#recycle', '@Recycle', '$RECYCLE.BIN',
-                   'System Volume Information']
+                   'System Volume Information', '!Playlists']
 
 # Never sent to the browser: GET /api/config replaces them with has_<key>
 # flags; POST only overwrites one when a non-empty value is sent.
@@ -100,6 +112,14 @@ def _migrate(c):
         c['library_root'] = 'smb://' + root.lstrip('\\').replace('\\', '/')
         changed = True
 
+    # v2: '!Playlists' joined the default ignore list; add it to lists saved before.
+    if c.get('settings_version', 1) < 2:
+        pats = c.get('ignored_folders')
+        if isinstance(pats, list) and not any(p.lower() == '!playlists' for p in pats):
+            pats.append('!Playlists')
+        c['settings_version'] = 2
+        changed = True
+
     for k in [k for k in c if k not in DEFAULTS]:
         c.pop(k)
         changed = True
@@ -110,7 +130,9 @@ def load_cfg():
     if os.path.exists(CFG_FILE):
         try:
             with open(CFG_FILE) as f:
-                cfg.update(json.load(f))
+                saved = json.load(f)
+            saved.setdefault('settings_version', 1)   # files from before versioning
+            cfg.update(saved)
         except Exception:
             pass
     if _migrate(cfg):

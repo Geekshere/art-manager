@@ -1,10 +1,10 @@
 """Flask app: HTTP API, embed jobs (SSE), access control and the CLI entry point."""
-import argparse, concurrent.futures, hashlib, hmac, json, os, posixpath, socket, string, sys
-import threading, time, uuid, webbrowser
+import argparse, concurrent.futures, hashlib, hmac, json, logging, os, posixpath, socket, string
+import subprocess, sys, threading, time, traceback, urllib.request, uuid, webbrowser
 
 from flask import Flask, Response, jsonify, render_template, request
 
-from . import __version__, config, storage
+from . import __version__, check, config, storage
 from .artwork import (collect_album_flacs, decode_uploaded_image, dl_image, embed_into,
                       find_album_embedded, read_flac, to_data_url, to_jpeg, write_artist_img,
                       write_covers)
@@ -13,6 +13,7 @@ from .scan import SCHEMA_VERSION, apply_ignore, client_view, list_dir, scan_libr
 from .search import run_providers
 
 app = Flask(__name__)
+log = logging.getLogger('art_manager')
 
 # ── Library cache (in memory + on disk so restarts don't lose it) ────────────
 
@@ -108,7 +109,7 @@ def _require_password():
         hostname = host.split(']')[0] + ']' if host.startswith('[') else host.rsplit(':', 1)[0]
         if hostname.lower() not in _LOOPBACK_HOSTNAMES:
             return Response('Forbidden host', 403)
-    if not _password_required():
+    if not _password_required() or request.path == '/api/ping':
         return None
     a = request.authorization
     if a and a.password is not None and _password_ok(a.password):
@@ -137,6 +138,20 @@ def spa_route(client_path):
     if client_path.startswith('api/'):
         return jsonify({'error': 'Not found'}), 404
     return render_template('index.html', version=__version__)
+
+@app.route('/api/ping')
+def api_ping():
+    """Lets a second launch find this one (and open the browser instead of starting again)."""
+    return jsonify({'app': 'art-manager', 'version': __version__})
+
+@app.route('/api/quit', methods=['POST'])
+def api_quit():
+    # JSON only: a plain cross-site form post can't trigger it.
+    if not request.is_json:
+        return jsonify({'error': 'JSON required'}), 400
+    log.info('quit requested from the browser')
+    threading.Timer(0.5, lambda: os._exit(0)).start()
+    return jsonify({'ok': True})
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 
@@ -182,6 +197,7 @@ def api_config():
 
 def _public():
     out = public_cfg()
+    out['settings_file'] = config.CFG_FILE
     out['running'] = {'network': not _auth['loopback_only'], 'port': _running['port'],
                       'password_from_cli': bool(_auth['password'])}
     return out
@@ -267,14 +283,14 @@ def api_scan():
             or request.args.get('full') == '1'):
         prev = None   # full rescan: re-read every folder, ignore the cache
 
-    errors = []
+    errors, skipped = [], []
     try:
-        artists = scan_library(root, prev['artists'] if prev else None, errors)
+        artists = scan_library(root, prev['artists'] if prev else None, errors, skipped)
     except Exception as e:
         return jsonify({'error': storage.error_message(e, root)}), 502
     errors.sort(key=lambda e: e['path'])
     _cached_lib = {'root': root, 'artists': artists, 'scanned_at': time.time(), 'errors': errors,
-                   'version': SCHEMA_VERSION}
+                   'skipped': sorted(skipped), 'version': SCHEMA_VERSION}
     _save_lib_cache(_cached_lib)
     return jsonify(client_view(_cached_lib))
 
@@ -400,6 +416,41 @@ def api_set_artist_img():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# ── File check ────────────────────────────────────────────────────────────────
+
+@app.route('/api/check', methods=['GET', 'POST'])
+def api_check():
+    """POST: start checking the whole scanned library. GET: running job (if any) and the last report."""
+    if request.method == 'POST':
+        lib = _library()
+        if not lib or not lib.get('artists'):
+            return jsonify({'error': 'Scan the library first'}), 400
+        d = request.json or {}
+        job = check.start_job(apply_ignore(lib), deep=bool(d.get('deep')))
+        return jsonify(job.progress())
+    job = check.running_job()
+    return jsonify({'running': job.progress() if job else None, 'report': check.last_report(),
+                    'deep_available': check.deep_check_available()})
+
+@app.route('/api/check/<job_id>', methods=['GET', 'DELETE'])
+def api_check_job(job_id):
+    job = check.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Unknown check'}), 404
+    if request.method == 'DELETE':
+        job.cancelled = True
+    return jsonify(job.progress())
+
+@app.route('/api/check-album', methods=['POST'])
+def api_check_album():
+    d = request.json or {}
+    album = {'name': d.get('name', ''), 'path': d.get('path', ''), 'disc_info': d.get('disc_info') or []}
+    if (err := _check_paths(album['path'], *[x.get('path', '') for x in album['disc_info']])):
+        return err
+    res = check.check_album(album, deep=bool(d.get('deep')))
+    check._save_cache()
+    return jsonify(res)
+
 # ── Embed jobs ────────────────────────────────────────────────────────────────
 
 _jobs = {}
@@ -499,7 +550,12 @@ def prepare(argv=None):
     parser = argparse.ArgumentParser(prog='art-manager', description='Art Manager — artwork for a FLAC library')
     parser.add_argument('library', nargs='?',
                         help='Local path, smb://host/share/path, or webdav(s)://host/path (saved)')
-    parser.add_argument('--port', type=int, default=None,
+    def port_number(v):
+        p = int(v)
+        if not 1 <= p <= 65535:
+            raise argparse.ArgumentTypeError('must be between 1 and 65535')
+        return p
+    parser.add_argument('--port', type=port_number, default=None,
                         help='Port (default: from Settings, 5000; the next free one is used if taken)')
     parser.add_argument('--host', default=None,
                         help='Interface to listen on, e.g. 0.0.0.0 (default: from Settings — '
@@ -533,22 +589,138 @@ def prepare(argv=None):
     _auth['password'] = args.password or os.environ.get('ARTMGR_PASSWORD') or None
     _auth['loopback_only'] = _is_loopback(host)
     _running.update(host=host, port=port)
-    if os.environ.get('ARTMGR_DEBUG'):
-        import logging
-        logging.basicConfig(level=logging.DEBUG if os.environ['ARTMGR_DEBUG'] == '2' else logging.INFO, format='%(asctime)s %(name)s: %(message)s')
-    open_browser = args.open_browser if args.open_browser is not None else frozen
-    return host, port, wanted, open_browser
+    want_browser = args.open_browser if args.open_browser is not None else frozen
+    return host, port, wanted, want_browser
 
+
+def _setup_logging():
+    """Always log to <data dir>/art-manager.log (startup, errors); ARTMGR_DEBUG adds detail on screen."""
+    log.setLevel(logging.DEBUG)
+    if getattr(log, '_artmgr_configured', False):
+        return
+    log._artmgr_configured = True
+    try:
+        from logging.handlers import RotatingFileHandler
+        fh = RotatingFileHandler(os.path.join(config.DATA_DIR, 'art-manager.log'),
+                                 maxBytes=1_000_000, backupCount=1, encoding='utf-8')
+        fh.setLevel(logging.INFO)
+        fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
+        log.addHandler(fh)
+    except OSError:
+        pass
+    if os.environ.get('ARTMGR_DEBUG'):
+        sh = logging.StreamHandler()
+        sh.setLevel(logging.DEBUG if os.environ['ARTMGR_DEBUG'] == '2' else logging.INFO)
+        sh.setFormatter(logging.Formatter('%(asctime)s %(name)s: %(message)s'))
+        log.addHandler(sh)
+
+def _fix_child_env():
+    """
+    The Linux standalone app points LD_LIBRARY_PATH at its own bundled
+    libraries; a browser started from it would inherit that and can fail
+    silently. Put the user's original value back for child processes.
+    """
+    if getattr(sys, 'frozen', False) and sys.platform.startswith('linux'):
+        orig = os.environ.pop('LD_LIBRARY_PATH_ORIG', None)
+        if orig is not None:
+            os.environ['LD_LIBRARY_PATH'] = orig
+        else:
+            os.environ.pop('LD_LIBRARY_PATH', None)
+
+def _art_manager_at(port):
+    """True if an Art Manager already answers on this port of this computer."""
+    try:
+        with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/ping', timeout=1.5) as r:
+            return json.load(r).get('app') == 'art-manager'
+    except Exception:
+        return False
+
+def open_browser(url):
+    """Open url in the user's browser. Returns True if a browser was started."""
+    try:
+        if sys.platform == 'win32':
+            os.startfile(url)
+            return True
+        if sys.platform == 'darwin':
+            return subprocess.call(['open', url]) == 0
+        for cmd in (['xdg-open', url], ['gio', 'open', url]):
+            try:
+                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+            except FileNotFoundError:
+                continue
+    except Exception as e:
+        log.info('could not open the browser directly: %r', e)
+    try:
+        return webbrowser.open(url)
+    except Exception as e:
+        log.info('webbrowser failed: %r', e)
+        return False
+
+def _open_when_ready(port, url):
+    """Wait until the server accepts connections, then open the browser."""
+    for _ in range(150):
+        try:
+            socket.create_connection(('127.0.0.1', port), timeout=0.5).close()
+            break
+        except OSError:
+            time.sleep(0.1)
+    if open_browser(url):
+        print(f"  Opened {url} in your browser.\n", flush=True)
+    else:
+        print(f"  Couldn't open a browser automatically — open {url} yourself.\n", flush=True)
+
+def _pause_before_exit():
+    """Keep the standalone app's window open so a message can be read."""
+    if getattr(sys, 'frozen', False):
+        try:
+            if sys.stdin and sys.stdin.isatty():
+                input('\nPress Enter to close this window.')
+            else:
+                time.sleep(15)
+        except Exception:
+            pass
 
 def main(argv=None):
     # A Windows console or a redirected log may not handle "→" etc.: never crash on it.
     for stream in (sys.stdout, sys.stderr):
         try: stream.reconfigure(errors='replace')
         except Exception: pass
-    host, port, wanted, open_browser = prepare(argv)
+    _fix_child_env()
+    _setup_logging()
+    try:
+        _main(argv)
+    except SystemExit:
+        raise
+    except BaseException as e:
+        if isinstance(e, KeyboardInterrupt):
+            return
+        msg = traceback.format_exc()
+        log.error('Art Manager stopped with an error:\n%s', msg)
+        print('\nArt Manager stopped with an error:\n')
+        print(msg)
+        print(f'This is also saved in {os.path.join(config.DATA_DIR, "art-manager.log")}')
+        _pause_before_exit()
+        sys.exit(1)
+
+def _main(argv):
+    host, port, wanted, want_browser = prepare(argv)
     frozen = getattr(sys, 'frozen', False)
+
+    # Double-clicked again while it's already running: just show it.
+    if port != wanted and _art_manager_at(wanted):
+        url = f"http://localhost:{wanted}"
+        print(f"\nArt Manager is already running at {url}")
+        if want_browser:
+            open_browser(url)
+            print("  Opened it in your browser.")
+        if frozen:
+            time.sleep(4)
+        return
+
     url = f"http://localhost:{port}"
     root = cfg['library_root'] or ''
+    log.info('starting %s on %s:%s, library %r', __version__, host, port, root)
     print(f"\nArt Manager {__version__}  →  {url}")
     if port != wanted:
         print(f"  (port {wanted} is in use, using {port})")
@@ -563,11 +735,12 @@ def main(argv=None):
             print("  WARNING : no app password set — ANYONE on your network can change your library.")
             print("            Set one in Settings → Access.")
     if frozen:
-        print("\n  Close this window to stop Art Manager.")
+        print("\n  Keep this window open while you use Art Manager; close it (or use")
+        print("  Settings → Quit) to stop.")
     print()
 
-    if open_browser:
-        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    if want_browser:
+        threading.Thread(target=_open_when_ready, args=(port, url), daemon=True).start()
     app.run(host=host, port=port, debug=False, threaded=True)
 
 

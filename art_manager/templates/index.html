@@ -77,6 +77,16 @@ h3 { font-size:12px; font-weight:700; color:#555; text-transform:uppercase; lett
 .src-loading { color:#888; font-style:italic; }
 .src-unavail { color:#a60; }
 
+/* File check */
+.chk-album { border:1px solid #ddd; border-radius:4px; margin:8px 0; padding:8px 10px; }
+.chk-album-hdr { display:flex; gap:8px; align-items:center; font-weight:600; font-size:12px; }
+.chk-row { font-size:12px; padding:2px 0 2px 14px; }
+.chk-file { font-family:ui-monospace,monospace; font-size:11px; color:#333; }
+.lvl { display:inline-block; min-width:52px; font-size:10px; font-weight:700; text-transform:uppercase; }
+.lvl-error { color:#c00; } .lvl-warn { color:#a60; } .lvl-info { color:#777; }
+.track-flag { font-size:11px; flex-shrink:0; cursor:help; }
+#chk-summary { margin:8px 0; font-size:12px; }
+
 /* Three-column layout */
 .three-col { display:grid; grid-template-columns:230px 1fr 270px; gap:14px; align-items:start; }
 
@@ -147,9 +157,12 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
     <span id="hdr-scanned"></span>
     <button id="hdr-update-btn" onclick="doScan(false)" title="Re-read the folders that changed since the last scan">⟳ Update Library</button>
     <span id="hdr-msg"></span>
+    <span id="hdr-skipped" class="note hidden" style="font-size:11px;cursor:help"></span>
     <a id="hdr-errors" href="#" class="warn hidden" style="font-size:11px" onclick="toggleScanErrors();return false"></a>
     <button onclick="showV('v-settings')">Settings</button>
     <button onclick="showMissing()">Missing Report</button>
+    <button onclick="showCheck()" title="Find damaged FLAC files, missing tags and bad covers">Check Files</button>
+    <button onclick="quitApp()" title="Stop Art Manager">⏻ Quit</button>
 </div>
 
 <div id="scan-errors" class="hidden" style="background:#fff8e5;border-bottom:1px solid #e0c060;padding:8px 14px;font-size:12px">
@@ -349,7 +362,9 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
 
         <!-- RIGHT -->
         <div>
-            <h3>Tracks <span id="alb-track-count" class="note"></span></h3>
+            <h3 style="display:flex;align-items:center;gap:6px">Tracks <span id="alb-track-count" class="note"></span>
+                <button id="alb-check-btn" style="margin-left:auto;font-size:11px;text-transform:none;letter-spacing:0" onclick="checkThisAlbum()" title="Look for damaged files, missing tags and bad covers">Check these files</button></h3>
+            <div id="alb-check-res" class="note" style="margin:0 0 6px"></div>
             <div id="alb-tracks"><div style="padding:8px;color:#888"><span class="spinner"></span> loading...</div></div>
         </div>
     </div>
@@ -414,6 +429,9 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
     <p id="access-note" class="note" style="max-width:600px;margin:0 0 8px 138px"></p>
     <p id="cfg-status" class="note" style="margin-top:6px;max-width:600px"></p>
     <hr class="sep">
+    <div class="cfg-row"><label>Stop</label><button onclick="quitApp()">Quit Art Manager</button><span class="note">stops the program (start it again to come back)</span></div>
+    <p class="note" style="margin:4px 0 0 138px">Your settings are saved in <code id="cfg-file"></code> and kept between restarts and updates.</p>
+    <hr class="sep">
     <h3>Image sources</h3>
     <table style="font-size:12px;border-collapse:collapse;margin-top:8px;color:#555">
         <tr><td style="padding:3px 8px 3px 0;font-weight:700;color:#333;white-space:nowrap">CAA</td><td>Cover Art Archive — verified scans from MusicBrainz. Often 1500–3000px+. Shown first. Rate-limited, first page only.</td></tr>
@@ -425,6 +443,34 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
         <tr><td style="padding:3px 8px 3px 0;font-weight:700;color:#333;white-space:nowrap">Web</td><td>General image search via DuckDuckGo and Bing. Neither has an official keyless API — this uses the same unofficial endpoints as their websites, so it may be rate-limited or stop working; it then shows as <em>unavailable</em> and the other sources carry on. Results are filtered for relevance and shown after all other sources.</td></tr>
     </table>
     <p class="note" style="margin-top:8px">CAA and Web load separately (slower): CAA is added to the front of the results, Web to the end. iTunes, Deezer, CAA, Wikipedia and Web need no key.</p>
+</div>
+
+<!-- FILE CHECK -->
+<div id="v-check" class="page hidden">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <h2 style="margin:0">Check files</h2>
+        <button onclick="goBack()">← Back</button>
+    </div>
+    <p class="note" style="max-width:760px">Reads only the start and end of each FLAC file — so it is quick even over the network — and finds
+        files that are cut off or damaged, missing tags (title, artist, album, track number), tracks without an embedded cover,
+        unreadable or low-resolution <code>cover.jpg</code> files, and albums whose tracks disagree. Files that haven't changed
+        since the last check are not read again.</p>
+    <div style="display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap">
+        <button class="primary" id="chk-start" onclick="startCheck()">Check whole library</button>
+        <button id="chk-cancel" class="hidden" onclick="cancelCheck()">Cancel</button>
+        <label class="note" id="chk-deep-lbl" style="display:flex;gap:5px;align-items:center"><input type="checkbox" id="chk-deep"> also decode every file completely (slow; local folders only)</label>
+    </div>
+    <div id="chk-progress" class="hidden">
+        <div class="emb-pbar-outer"><div class="emb-pbar-inner" id="chk-bar" style="width:0%">0%</div></div>
+        <div id="chk-current" class="note"></div>
+    </div>
+    <div id="chk-summary"></div>
+    <div id="chk-filters" class="hidden" style="display:flex;gap:12px;font-size:12px;margin-bottom:6px">
+        <label><input type="checkbox" class="chk-lvl" value="error" checked onchange="renderCheckReport()"> <span class="lvl-error">Errors</span></label>
+        <label><input type="checkbox" class="chk-lvl" value="warn" checked onchange="renderCheckReport()"> <span class="lvl-warn">Warnings</span></label>
+        <label><input type="checkbox" class="chk-lvl" value="info" onchange="renderCheckReport()"> <span class="lvl-info">Info</span></label>
+    </div>
+    <div id="chk-results"></div>
 </div>
 
 <!-- MISSING -->
@@ -552,12 +598,12 @@ function navigateFromURL(){
 window.addEventListener('popstate',()=>navigateFromURL());
 
 // ── Views ─────────────────────────────────────────────────────────────────
-const VIEWS=['v-setup','v-artists','step-artist','step-album','v-settings','v-missing'];
+const VIEWS=['v-setup','v-artists','step-artist','step-album','v-settings','v-missing','v-check'];
 function showV(id){
     VIEWS.forEach(v=>document.getElementById(v).classList.add('hidden'));
     document.getElementById(id).classList.remove('hidden');
     document.getElementById('wiz-bar').classList.toggle('hidden',!lib||(id!=='step-artist'&&id!=='step-album'));
-    if(!['v-settings','v-missing'].includes(id)) prevView=id;
+    if(!['v-settings','v-missing','v-check'].includes(id)) prevView=id;
 }
 function showArtistList(){ activeQueue=fullQueue; history.pushState({},'','/'); renderArtistList(); showV('v-artists'); }
 function goBack(){ showV(prevView||'v-setup'); }
@@ -650,6 +696,7 @@ function toggleConnFields(){
 // never writes stale values back.
 function fillCfgForm(c){
     clientCfg=c;
+    setEl('cfg-file',c.settings_file||'');
     document.getElementById('cfg-root').value=c.library_root||'';
     document.getElementById('cfg-web').checked=c.web_search!==false;
     document.getElementById('cfg-user').value=c.storage_username||'';
@@ -701,6 +748,12 @@ async function testConnection(){
     }finally{
         btn.disabled=false;
     }
+}
+
+async function quitApp(){
+    if(!confirm('Quit Art Manager?')) return;
+    try{ await api('/api/quit',{method:'POST',body:'{}'}); }catch(_){}
+    document.body.innerHTML='<div class="page"><h2>Art Manager has stopped.</h2><p class="note">You can close this tab. Start Art Manager again to come back.</p></div>';
 }
 
 // ── Setup screen ──────────────────────────────────────────────────────────
@@ -882,11 +935,17 @@ function renderScanErrors(){
         '<div><span>'+esc(e.path)+'</span> — <span class="err">'+esc(e.message)+'</span></div>').join('');
     if(!errs.length) document.getElementById('scan-errors').classList.add('hidden');
 }
+function renderSkipped(){
+    const sk=(lib&&lib.skipped)||[], e=document.getElementById('hdr-skipped');
+    e.classList.toggle('hidden',!sk.length);
+    e.textContent=sk.length+' folder'+(sk.length===1?'':'s')+' without albums skipped';
+    e.title='Top-level folders with no FLAC albums inside are not shown:\n'+sk.join('\n');
+}
 function toggleScanErrors(){ document.getElementById('scan-errors').classList.toggle('hidden'); }
 
 function applyLibrary(d){
     lib=d;
-    renderScanErrors();
+    renderScanErrors(); renderSkipped();
     document.getElementById('hdr-path').textContent=lib.root;
     document.getElementById('hdr-scanned').textContent=lib.scanned_at?('scanned '+fmtAgo(lib.scanned_at)):'';
     computeStale();
@@ -1122,6 +1181,7 @@ async function loadAlbumStep(ai,ali){
     setEl('alb-pgnum','pg 1');
 
     setEl('alb-track-count','');
+    document.getElementById('alb-check-res').innerHTML='';
     document.getElementById('alb-tracks').innerHTML='<div style="padding:8px;color:#888"><span class="spinner"></span> loading...</div>';
     api('/api/album-tracks?path='+enc(album.path)).then(data=>{
         if(gen===stepGen) renderTrackList(data,Date.now());
@@ -1366,7 +1426,7 @@ function renderTrackList(data,ts){
             h.textContent=g.disc_name; box.appendChild(h);
         }
         g.tracks.forEach(t=>{
-            const row=document.createElement('div'); row.className='track-row';
+            const row=document.createElement('div'); row.className='track-row'; row.dataset.path=t.path;
             const num=t.track_num?String(parseInt(t.track_num)).padStart(2,'0'):'–';
             const numEl=document.createElement('span'); numEl.className='track-num'; numEl.textContent=num;
             let artEl;
@@ -1384,6 +1444,113 @@ function renderTrackList(data,ts){
             box.appendChild(row);
         });
     });
+}
+
+// ── File check ────────────────────────────────────────────────────────────
+let checkReport=null, checkJob=null, checkTimer=null;
+const LVL_RANK={error:0,warn:1,info:2};
+function fmtDate(ts){ try{ return new Date(ts*1000).toLocaleString(); }catch(_){ return ''; } }
+
+async function showCheck(){
+    showV('v-check');
+    try{
+        const d=await api('/api/check');
+        const deep=document.getElementById('chk-deep');
+        deep.disabled=!d.deep_available;
+        document.getElementById('chk-deep-lbl').title=d.deep_available?'':'Install the "flac" program to enable this';
+        checkReport=d.report;
+        if(d.running){ checkJob=d.running.id; pollCheck(); }
+        renderCheckReport();
+    }catch(e){ setEl('chk-summary','✗ '+e.message); }
+}
+async function startCheck(){
+    try{
+        const d=await api('/api/check',{method:'POST',body:JSON.stringify({deep:document.getElementById('chk-deep').checked})});
+        checkJob=d.id; pollCheck();
+    }catch(e){ setEl('chk-summary','✗ '+e.message); }
+}
+async function cancelCheck(){ if(checkJob) try{ await api('/api/check/'+checkJob,{method:'DELETE'}); }catch(_){} }
+function pollCheck(){
+    clearTimeout(checkTimer);
+    document.getElementById('chk-progress').classList.remove('hidden');
+    document.getElementById('chk-cancel').classList.remove('hidden');
+    document.getElementById('chk-start').disabled=true;
+    const tick=async()=>{
+        let d;
+        try{ d=await api('/api/check/'+checkJob); }catch(e){ setEl('chk-current','✗ '+e.message); return; }
+        const pct=d.total?Math.round(d.done/d.total*100):100;
+        const bar=document.getElementById('chk-bar'); bar.style.width=pct+'%'; bar.textContent=pct+'%';
+        setEl('chk-current',d.done+' / '+d.total+' albums · '+d.elapsed+'s · '+(d.current||''));
+        if(d.status==='running'){ checkTimer=setTimeout(tick,600); return; }
+        document.getElementById('chk-progress').classList.add('hidden');
+        document.getElementById('chk-cancel').classList.add('hidden');
+        document.getElementById('chk-start').disabled=false;
+        checkReport=d.report; checkJob=null; renderCheckReport();
+    };
+    tick();
+}
+function renderCheckReport(){
+    const sum=document.getElementById('chk-summary'), out=document.getElementById('chk-results');
+    const filters=document.getElementById('chk-filters');
+    if(!checkReport){ sum.innerHTML='<span class="note">No check has been run yet.</span>'; out.innerHTML=''; filters.classList.add('hidden'); return; }
+    const r=checkReport, c=r.counts||{};
+    filters.classList.remove('hidden'); filters.style.display='flex';
+    sum.innerHTML=(r.complete?'':'<span class="warn">Cancelled — partial results. </span>')+
+        'Checked '+r.files_checked+' files in '+r.albums_checked+' albums ('+r.seconds+' s'+(r.deep?', full decode':'')+') on '+esc(fmtDate(r.finished_at))+': '+
+        '<span class="lvl-error"><b>'+(c.error||0)+'</b> errors</span> · <span class="lvl-warn"><b>'+(c.warn||0)+'</b> warnings</span> · '+
+        '<span class="lvl-info">'+(c.info||0)+' info</span>';
+    const show=new Set([...document.querySelectorAll('.chk-lvl:checked')].map(x=>x.value));
+    const albums=(r.albums||[]).map(a=>{
+        const albumIssues=a.issues.filter(i=>show.has(i.level));
+        const files=a.files.map(f=>({...f,issues:f.issues.filter(i=>show.has(i.level))})).filter(f=>f.issues.length);
+        const worst=Math.min(...[...albumIssues,...files.flatMap(f=>f.issues)].map(i=>LVL_RANK[i.level]),9);
+        return {...a,albumIssues,files,worst};
+    }).filter(a=>a.albumIssues.length||a.files.length).sort((x,y)=>x.worst-y.worst||x.artist.localeCompare(y.artist));
+    if(!albums.length){ out.innerHTML='<p class="ok">Nothing to report'+(show.size<3?' at the selected levels':'')+'. ✓</p>'; return; }
+    const line=i=>'<div class="chk-row"><span class="lvl lvl-'+i.level+'">'+i.level+'</span>'+esc(i.msg)+'</div>';
+    out.innerHTML=albums.map((a,k)=>'<div class="chk-album"><div class="chk-album-hdr"><span>'+esc(a.artist)+' — '+esc(a.album)+'</span>'+
+        '<button style="margin-left:auto;font-size:11px" data-open="'+k+'">Open album →</button></div>'+
+        a.albumIssues.map(line).join('')+
+        a.files.map(f=>'<div class="chk-row chk-file">'+esc(f.name)+'</div>'+f.issues.map(i=>line(i).replace('chk-row','chk-row" style="padding-left:28px')).join('')).join('')+
+        '</div>').join('');
+    out.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>openAlbumByPath(albums[+b.dataset.open].path)));
+}
+function openAlbumByPath(path){
+    if(!lib) return;
+    for(let ai=0;ai<lib.artists.length;ai++){
+        const ali=lib.artists[ai].albums.findIndex(al=>al.path===path);
+        if(ali>=0){
+            activeQueue=fullQueue;
+            const qi=fullQueue.findIndex(q=>q.type==='album'&&q.ai===ai&&q.ali===ali);
+            if(qi>=0){ pos=qi; showStep(pos); }
+            return;
+        }
+    }
+}
+async function checkThisAlbum(){
+    const al=lib.artists[curAI].albums[curALI], gen=stepGen;
+    const btn=document.getElementById('alb-check-btn'), res=document.getElementById('alb-check-res');
+    btn.disabled=true; res.innerHTML='<span class="spinner"></span> checking…';
+    try{
+        const d=await api('/api/check-album',{method:'POST',body:JSON.stringify({name:al.name,path:al.path,disc_info:al.disc_info})});
+        if(gen!==stepGen) return;
+        document.querySelectorAll('#alb-tracks .track-flag').forEach(x=>x.remove());
+        let errs=0, warns=0;
+        d.files.forEach(f=>f.issues.forEach(i=>{ if(i.level==='error') errs++; else if(i.level==='warn') warns++; }));
+        d.issues.forEach(i=>{ if(i.level==='error') errs++; else if(i.level==='warn') warns++; });
+        d.files.filter(f=>f.kind==='flac'&&f.issues.some(i=>i.level!=='info')).forEach(f=>{
+            const row=[...document.querySelectorAll('#alb-tracks .track-row')].find(r=>r.dataset.path===f.path);
+            if(!row) return;
+            const bad=f.issues.some(i=>i.level==='error');
+            const flag=document.createElement('span'); flag.className='track-flag '+(bad?'lvl-error':'lvl-warn');
+            flag.textContent=bad?'✗':'⚠'; flag.title=f.issues.filter(i=>i.level!=='info').map(i=>i.msg).join('\n');
+            row.appendChild(flag);
+        });
+        const other=[...d.issues,...d.files.filter(f=>f.kind==='cover').flatMap(f=>f.issues)].filter(i=>i.level!=='info');
+        res.innerHTML=(errs||warns?'<span class="'+(errs?'lvl-error':'lvl-warn')+'">'+errs+' error'+(errs===1?'':'s')+', '+warns+' warning'+(warns===1?'':'s')+'</span> — hover the marks for details':'<span class="ok">✓ All files look fine</span>')+
+            other.map(i=>'<div><span class="lvl lvl-'+i.level+'">'+i.level+'</span>'+esc(i.msg)+'</div>').join('');
+    }catch(e){ if(gen===stepGen) res.textContent='✗ '+e.message; }
+    finally{ btn.disabled=false; }
 }
 
 // ── Missing report ────────────────────────────────────────────────────────
