@@ -237,6 +237,68 @@ const gridLabels = (page, id) => page.$$eval(`#${id} .img-cell img`, els => els.
     await page.close();
   }
 
+  // ── 8. Check Files page ──────────────────────────────────────────────────
+  {
+    const page = await newPage();
+    await mockSearch(page, {});
+    await page.goto(BASE + '/');
+    await page.waitForSelector('#v-artists:not(.hidden)');
+    await page.click('#hdr button:has-text("Check Files")');
+    await page.click('#chk-start');
+    await page.waitForFunction(() => /Checked/.test(document.getElementById('chk-summary').textContent), null, { timeout: 15000 });
+    const sum = await page.textContent('#chk-summary');
+    check(/Checked \d+ files in \d+ albums/.test(sum), `check summary: ${sum.slice(0, 80)}`);
+    check((await page.textContent('#chk-results')).includes('No embedded cover'), 'report lists tracks without embedded cover');
+    await page.close();
+  }
+
+  // ── 9. Quick fix + keyboard shortcuts ─────────────────────────────────────
+  {
+    const page = await newPage();
+    await mockSearch(page, {});
+    // an album that has art, but as folder.jpg instead of cover.jpg
+    const root = (await (await page.request.get(BASE + '/api/config')).json()).library_root;
+    require('fs').writeFileSync(require('path').join(root, '!!!', 'Thr!!!er', 'folder.jpg'),
+      Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64), Buffer.from([0xff, 0xd9])]));
+    await page.request.get(BASE + '/api/scan?full=1');
+    await page.goto(BASE + '/');
+    await page.waitForSelector('#v-artists:not(.hidden)');
+    await page.click('#hdr button:has-text("Missing Report")');
+    const fixBtn = page.locator('#quick-fixes button.primary');
+    const label = await fixBtn.textContent();
+    check(/^Fix \d+ album/.test(label), `quick fix offered: ${label}`);
+    await fixBtn.click();
+    await page.waitForFunction(() => /Fixed \d+ album/.test(document.getElementById('missing-body').textContent), null, { timeout: 20000 });
+    const lib = await page.evaluate(() => lib.artists.flatMap(a => a.albums.map(al => [al.name, al.has_cover])));
+    check(lib.some(([n, h]) => n === 'Thr!!!er' && h), `album with only folder.jpg is complete after the fix ${JSON.stringify(lib)}`);
+    // shortcuts
+    await page.goto(BASE + '/Alpha/');
+    await page.waitForSelector('#step-artist:not(.hidden)');
+    await page.keyboard.press('ArrowRight');
+    await page.waitForSelector('#step-album:not(.hidden)');
+    check(await page.textContent('#alb-name') === 'First', '→ goes to the next step');
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForSelector('#step-artist:not(.hidden)');
+    await page.keyboard.press('Escape');
+    check(await page.isVisible('#v-artists'), 'Esc returns to the artist list');
+    await page.close();
+  }
+
+  // ── 10. Quit from the browser (last: stops the server) ───────────────────
+  {
+    const page = await newPage();
+    page.on('dialog', d => d.accept());
+    await page.goto(BASE + '/');
+    await page.waitForSelector('#v-artists:not(.hidden)');
+    await page.click('#hdr button:has-text("Quit")');
+    await page.waitForFunction(() => /has stopped/.test(document.body.textContent));
+    await sleep(1500);
+    let alive = true;
+    try { await page.request.get(BASE + '/api/ping', { timeout: 2000 }); } catch (_) { alive = false; }
+    check(!alive, 'Quit stops the server');
+    await page.close();
+  }
+
   check(errors.length === 0, 'no page errors ' + JSON.stringify(errors));
   await browser.close();
   console.log(failures ? `${failures} FAILED` : 'ALL PASSED');

@@ -6,8 +6,8 @@ from flask import Flask, Response, jsonify, render_template, request
 
 from . import __version__, check, config, storage
 from .artwork import (collect_album_flacs, decode_uploaded_image, dl_image, embed_into,
-                      find_album_embedded, read_flac, to_data_url, to_jpeg, write_artist_img,
-                      write_covers)
+                      find_album_embedded, fix_album_covers, read_flac, to_data_url, to_jpeg,
+                      write_artist_img, write_covers)
 from .config import cfg, is_ignored, load_cfg, parse_patterns, public_cfg, save_cfg
 from .scan import SCHEMA_VERSION, apply_ignore, client_view, list_dir, scan_library
 from .search import run_providers
@@ -450,6 +450,66 @@ def api_check_album():
     res = check.check_album(album, deep=bool(d.get('deep')))
     check._save_cache()
     return jsonify(res)
+
+# ── Bulk fix ──────────────────────────────────────────────────────────────────
+
+_fix_jobs = {}
+
+class _FixJob:
+    def __init__(self, albums, embed, use_embedded):
+        self.id = uuid.uuid4().hex[:12]
+        self.albums, self.embed, self.use_embedded = albums, embed, use_embedded
+        self.done, self.tracks, self.current, self.status = 0, 0, '', 'running'
+        self.cancelled = False
+        self.results = []
+
+    def progress(self):
+        c = {}
+        for r in self.results:
+            c[r['status']] = c.get(r['status'], 0) + 1
+        return {'id': self.id, 'status': self.status, 'done': self.done, 'total': len(self.albums),
+                'tracks': self.tracks, 'current': self.current, 'counts': c,
+                'results': self.results if self.status != 'running' else None}
+
+    def run(self):
+        for al in self.albums:
+            if self.cancelled:
+                break
+            self.current = al.get('label') or al['path']
+            try:
+                r = fix_album_covers(al, embed=self.embed, use_embedded=self.use_embedded,
+                                     on_track=lambda _p: setattr(self, 'tracks', self.tracks + 1))
+            except Exception as e:
+                r = {'status': 'error', 'written': [], 'embedded': 0, 'message': storage.error_message(e, al['path'])}
+            r['path'] = al['path']; r['label'] = al.get('label', '')
+            self.results.append(r)
+            self.done += 1
+        self.status = 'cancelled' if self.cancelled else 'done'
+
+@app.route('/api/fix-covers', methods=['POST'])
+def api_fix_covers():
+    """Bulk: give every album/disc folder in the list a cover.jpg (never overwriting one)."""
+    d = request.json or {}
+    albums = [{'path': a.get('path', ''), 'disc_info': a.get('disc_info') or [], 'label': a.get('label', '')}
+              for a in d.get('albums', [])]
+    for a in albums:
+        if (err := _check_paths(a['path'], *[x.get('path', '') for x in a['disc_info']])):
+            return err
+    if any(j.status == 'running' for j in _fix_jobs.values()):
+        return jsonify({'error': 'A fix is already running'}), 409
+    job = _FixJob(albums, embed=bool(d.get('embed', True)), use_embedded=bool(d.get('use_embedded', True)))
+    _fix_jobs[job.id] = job
+    threading.Thread(target=job.run, daemon=True, name='fix').start()
+    return jsonify(job.progress())
+
+@app.route('/api/fix-covers/<job_id>', methods=['GET', 'DELETE'])
+def api_fix_job(job_id):
+    job = _fix_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Unknown job'}), 404
+    if request.method == 'DELETE':
+        job.cancelled = True
+    return jsonify(job.progress())
 
 # ── Embed jobs ────────────────────────────────────────────────────────────────
 

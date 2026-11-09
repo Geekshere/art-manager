@@ -138,3 +138,65 @@ def embed_into(flac_path, data, mime):
         audio.clear_pictures(); audio.add_picture(pic)
         f.seek(0)
         audio.save(f)
+
+
+# ── Bulk fix ──────────────────────────────────────────────────────────────────
+
+def fix_album_covers(album, embed=True, use_embedded=True, on_track=None):
+    """
+    Make sure the album folder and every disc folder has a cover.jpg, without
+    ever replacing an existing cover.jpg (discs may have their own art).
+    Source for a folder that lacks one, in order: another cover image in that
+    folder (folder.jpg, cover.png, ...), the album's cover, the art embedded in
+    the tracks. With embed=True every track gets its folder's cover.jpg.
+    -> {'status': 'fixed'|'skipped'|'error', 'written': [paths], 'embedded': n, 'message'}
+    """
+    from .scan import _any_cover, find_cover_jpg
+    folders = [album['path']] + [d['path'] for d in album.get('disc_info', []) if d['path'] != album['path']]
+    listing = {f: list_dir(f)[0] for f in folders}
+    jpg = {f: find_cover_jpg(f, listing[f]) for f in folders}
+    other = {f: _any_cover(f, listing[f]) for f in folders}
+
+    def load(path):
+        return to_jpeg(storage.read_bytes(path), 'image/png' if path.lower().endswith('.png') else 'image/jpeg')
+
+    album_img = None
+    root = album['path']
+    if jpg[root]:
+        album_img = storage.read_bytes(jpg[root])
+    elif other[root]:
+        album_img = load(other[root])
+    else:
+        for f in folders:
+            if jpg[f] or other[f]:
+                album_img = storage.read_bytes(jpg[f]) if jpg[f] else load(other[f])
+                break
+    if album_img is None and use_embedded:
+        data, mime = find_album_embedded(album['path'], album.get('disc_info', []))
+        if data:
+            album_img = to_jpeg(data, mime)
+    if album_img is None:
+        return {'status': 'skipped', 'written': [], 'embedded': 0,
+                'message': 'no cover image or embedded art to use'}
+
+    written, folder_img = [], {}
+    for f in folders:
+        if jpg[f]:
+            folder_img[f] = storage.read_bytes(jpg[f]) if embed else None
+            continue
+        img = load(other[f]) if other[f] else album_img   # the folder's own art first
+        written.append(write_cover(f, img))
+        folder_img[f] = img
+
+    embedded = 0
+    if embed:
+        for f in folders:
+            img = folder_img.get(f)
+            if not img:
+                continue
+            for fl in _flacs_in(f):
+                embed_into(fl, img, 'image/jpeg')
+                embedded += 1
+                if on_track:
+                    on_track(fl)
+    return {'status': 'fixed', 'written': written, 'embedded': embedded, 'message': ''}

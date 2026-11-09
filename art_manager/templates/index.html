@@ -238,6 +238,7 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
     </div>
     <span id="wiz-pos"></span>
     <select id="jump-to" onchange="jumpTo(this.value)"><option value="">Jump to artist...</option></select>
+    <span class="note" title="← previous · → next / skip · Esc artist list">⌨ ← → Esc</span>
     <button onclick="showArtistList()">Artist list</button>
 </div>
 
@@ -466,9 +467,9 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
     </div>
     <div id="chk-summary"></div>
     <div id="chk-filters" class="hidden" style="display:flex;gap:12px;font-size:12px;margin-bottom:6px">
-        <label><input type="checkbox" class="chk-lvl" value="error" checked onchange="renderCheckReport()"> <span class="lvl-error">Errors</span></label>
-        <label><input type="checkbox" class="chk-lvl" value="warn" checked onchange="renderCheckReport()"> <span class="lvl-warn">Warnings</span></label>
-        <label><input type="checkbox" class="chk-lvl" value="info" onchange="renderCheckReport()"> <span class="lvl-info">Info</span></label>
+        <label><input type="checkbox" class="chk-lvl" value="error" checked onchange="saveLevels()"> <span class="lvl-error">Errors</span></label>
+        <label><input type="checkbox" class="chk-lvl" value="warn" checked onchange="saveLevels()"> <span class="lvl-warn">Warnings</span></label>
+        <label><input type="checkbox" class="chk-lvl" value="info" onchange="saveLevels()"> <span class="lvl-info">Info</span></label>
     </div>
     <div id="chk-results"></div>
 </div>
@@ -480,6 +481,7 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
         <button onclick="goBack()">← Back</button>
         <span class="note">Updates as you work — no rescan needed</span>
     </div>
+    <div id="quick-fixes" class="miss-section" style="border:1px solid #ddd;border-radius:4px;padding:10px 12px;max-width:820px"></div>
     <div id="missing-body"></div>
 </div>
 
@@ -1045,9 +1047,15 @@ function renderArtistList(){
         td.appendChild(btn); tr.appendChild(td); tbody.appendChild(tr);
     });
     setEl('al-count',lib.artists.length+' artists · '+totalA+' albums · '+totalM+' missing covers');
+    const f=document.getElementById('al-filter');
+    if(!f.value){ f.value=recall('artistFilter',''); }
+    if(f.value) filterArtistList(f.value);
 }
 
+function store(key,val){ try{ localStorage.setItem('artmgr.'+key,JSON.stringify(val)); }catch(_){} }
+function recall(key,dflt){ try{ const v=localStorage.getItem('artmgr.'+key); return v===null?dflt:JSON.parse(v); }catch(_){ return dflt; } }
 function filterArtistList(q){
+    store('artistFilter',q);
     const term=q.toLowerCase().trim();
     document.querySelectorAll('#artist-list-body tr').forEach(tr=>{
         tr.classList.toggle('hidden-row', term.length>0 && !tr.dataset.name.includes(term));
@@ -1451,8 +1459,14 @@ let checkReport=null, checkJob=null, checkTimer=null;
 const LVL_RANK={error:0,warn:1,info:2};
 function fmtDate(ts){ try{ return new Date(ts*1000).toLocaleString(); }catch(_){ return ''; } }
 
+function saveLevels(){
+    store('checkLevels',[...document.querySelectorAll('.chk-lvl:checked')].map(x=>x.value));
+    renderCheckReport();
+}
 async function showCheck(){
     showV('v-check');
+    const lv=recall('checkLevels',null);
+    if(lv) document.querySelectorAll('.chk-lvl').forEach(x=>{ x.checked=lv.includes(x.value); });
     try{
         const d=await api('/api/check');
         const deep=document.getElementById('chk-deep');
@@ -1554,8 +1568,65 @@ async function checkThisAlbum(){
 }
 
 // ── Missing report ────────────────────────────────────────────────────────
+// ── Quick fixes (bulk cover.jpg) ──────────────────────────────────────────
+let fixTimer=null;
+function fixCandidates(){
+    const fromImage=[], fromEmbedded=[];
+    lib.artists.forEach(a=>a.albums.forEach(al=>{
+        if(al.has_cover) return;
+        const item={path:al.path,disc_info:al.disc_info,label:a.name+' — '+al.name};
+        (al.cover_path?fromImage:fromEmbedded).push(item);
+    }));
+    return {fromImage,fromEmbedded};
+}
+function renderQuickFixes(){
+    const box=document.getElementById('quick-fixes');
+    if(!lib){ box.innerHTML=''; box.classList.add('hidden'); return; }
+    const {fromImage,fromEmbedded}=fixCandidates();
+    box.classList.toggle('hidden',!fromImage.length&&!fromEmbedded.length);
+    if(!fromImage.length&&!fromEmbedded.length) return;
+    box.innerHTML='<h3>Quick fixes</h3>'+
+        (fromImage.length?'<div class="cfg-row" style="margin:6px 0"><button class="primary" onclick="runFix(\'image\')">Fix '+fromImage.length+' album'+(fromImage.length===1?'':'s')+'</button>'+
+            '<span>have a cover image, but not as <code>cover.jpg</code> in every folder (e.g. only CD 1 has one, or it is <code>folder.jpg</code>)</span></div>':'')+
+        (fromEmbedded.length?'<div class="cfg-row" style="margin:6px 0"><button onclick="runFix(\'embedded\')">Try '+fromEmbedded.length+' album'+(fromEmbedded.length===1?'':'s')+'</button>'+
+            '<span>have no cover file — use the art embedded in their tracks where there is some</span></div>':'')+
+        '<label class="note" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="fix-embed" checked> also embed each cover into the tracks of its folder</label>'+
+        '<p class="note">Existing <code>cover.jpg</code> files are never replaced, so discs keep their own art. To pick new art, use the album page.</p>'+
+        '<div id="fix-progress" class="note"></div>';
+}
+async function runFix(kind){
+    const {fromImage,fromEmbedded}=fixCandidates();
+    const albums=kind==='image'?fromImage:fromEmbedded;
+    if(!albums.length) return;
+    const prog=document.getElementById('fix-progress');
+    document.querySelectorAll('#quick-fixes button').forEach(b=>b.disabled=true);
+    try{
+        const job=await api('/api/fix-covers',{method:'POST',body:JSON.stringify({albums,embed:document.getElementById('fix-embed').checked,use_embedded:true})});
+        const tick=async()=>{
+            const d=await api('/api/fix-covers/'+job.id);
+            prog.innerHTML='<span class="spinner"></span> '+d.done+' / '+d.total+' albums · '+d.tracks+' tracks · '+esc(d.current||'');
+            if(d.status==='running'){ fixTimer=setTimeout(tick,500); return; }
+            const c=d.counts||{};
+            const errs=(d.results||[]).filter(r=>r.status==='error');
+            await doScan(false);           // refresh what has a cover now
+            showMissing();
+            document.getElementById('fix-progress') && (document.getElementById('fix-progress').innerHTML='');
+            const msg=document.createElement('p');
+            msg.className=errs.length?'warn':'ok';
+            msg.innerHTML='✓ Fixed '+(c.fixed||0)+' album'+((c.fixed||0)===1?'':'s')+(c.skipped?' · '+c.skipped+' had no art to use':'')+
+                (errs.length?' · '+errs.length+' failed: '+errs.map(e=>esc(e.label+': '+e.message)).join('; '):'');
+            document.getElementById('missing-body').prepend(msg);
+        };
+        tick();
+    }catch(e){
+        prog.textContent='✗ '+e.message;
+        document.querySelectorAll('#quick-fixes button').forEach(b=>b.disabled=false);
+    }
+}
+
 function showMissing(){
     showV('v-missing');
+    renderQuickFixes();
     if(!lib){ document.getElementById('missing-body').innerHTML='<p class="note">No library loaded yet.</p>'; return; }
     const noImg=lib.artists.filter(a=>!a.has_img).map(a=>a.name);
     const noCover=[];
@@ -1648,6 +1719,18 @@ function handleAlbumUpload(input){ _readImageFile(input,dataUrl=>doEmbed('upload
 // ── Utilities ──────────────────────────────────────────────────────────────
 function enc(s){ return encodeURIComponent(String(s)); }
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── Keyboard shortcuts (wizard/browse steps) ──────────────────────────────
+document.addEventListener('keydown',e=>{
+    if(e.ctrlKey||e.metaKey||e.altKey) return;
+    const t=e.target; if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT')) return;
+    if(!document.getElementById('fb-modal').classList.contains('hidden')){ if(e.key==='Escape') closeBrowser(); return; }
+    const onStep=!document.getElementById('step-artist').classList.contains('hidden')||!document.getElementById('step-album').classList.contains('hidden');
+    if(!onStep) return;
+    if(e.key==='ArrowRight'){ e.preventDefault(); stepNext(); }
+    else if(e.key==='ArrowLeft'){ e.preventDefault(); stepBack(); }
+    else if(e.key==='Escape'){ e.preventDefault(); showArtistList(); }
+});
 
 // ── Boot ───────────────────────────────────────────────────────────────────
 (async()=>{
