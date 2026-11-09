@@ -45,8 +45,9 @@ jobs:
           ARTMGR_DATA_DIR=smoke/data ./out/${{ matrix.file }} smoke/music --port 5077 --no-browser > smoke/server.log 2>&1 &
           for i in $(seq 1 90); do curl -sf localhost:5077/ > /dev/null && break; sleep 1; done
           cat smoke/server.log
-          curl -sf localhost:5077/ | grep -q "<title>Art Manager"
-          curl -sf localhost:5077/api/scan | grep -q '"name":"Some Artist"'
+          # save first: `curl | grep -q` fails with pipefail when grep stops reading early
+          curl -sf localhost:5077/ -o smoke/page.html && grep -q "<title>Art Manager" smoke/page.html
+          curl -sf localhost:5077/api/scan -o smoke/scan.json && grep -q '"name":"Some Artist"' smoke/scan.json
       - name: Zip (macOS keeps the executable bit)
         if: runner.os == 'macOS'
         run: cd out && zip ${{ matrix.file }}.zip ${{ matrix.file }} && rm ${{ matrix.file }}

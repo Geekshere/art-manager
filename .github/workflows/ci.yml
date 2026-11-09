@@ -66,5 +66,5 @@ jobs:
           docker run -d --name am -p 5000:5000 -e ARTMGR_PASSWORD=ci -v /tmp/music:/music art-manager:ci /music
           for i in $(seq 1 30); do curl -sf -u x:ci localhost:5000/api/config >/dev/null && break; sleep 1; done
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:5000/api/config)" = 401
-          curl -sf -u x:ci localhost:5000/api/scan | grep -q '"name":"Artist"'
+          curl -sf -u x:ci localhost:5000/api/scan -o scan.json && grep -q '"name":"Artist"' scan.json
           docker rm -f am
