@@ -17,7 +17,8 @@ It only ever touches artwork — never tags, genres or filenames.
   with a live progress bar
 - **Start wizard** walks only the artists without `artist.jpg` and the albums
   without a cover, then returns to the artist list
-- Fast incremental rescans: **Update Library** only re-reads folders that changed
+- Fast incremental rescans: **Update Library** only re-reads folders that
+  changed (**↺ Full rescan** re-reads everything)
 - Missing-artwork report and an ignore list (`!Playlists`, NAS junk such as
   `@eaDir` or `#recycle`)
 - Folders that can't be read (a flaky share) are reported and retried next time

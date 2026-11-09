@@ -84,6 +84,15 @@ def test_warm_scan_reuses_cache_cheaply(client, make_library, fake):
     assert len(fake.calls) == 1 + len(artists) + 1
     assert froot + '/Alpha/First' not in fake.calls   # album folders themselves are not re-listed
 
+def test_full_rescan_ignores_cache(client, make_library, fake):
+    root = make_library()
+    froot = 'fake://' + str(root)
+    do_scan(client, froot)
+    fake.calls.clear()
+    r = client.get('/api/scan', query_string={'root': froot, 'full': '1'})
+    assert r.status_code == 200
+    assert len(fake.calls) == ndirs(root)   # every folder re-read, like a cold scan
+
 # ── Reliability (ROADMAP 2) ───────────────────────────────────────────────────
 
 def test_transient_error_is_retried(client, make_library, fake):

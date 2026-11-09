@@ -104,7 +104,10 @@ class LocalStorage(Storage):
                     is_dir = e.is_dir()
                     if not is_dir and not e.is_file():
                         continue
-                    st = e.stat()
+                    # On Windows, DirEntry.stat() comes from the parent's
+                    # directory index, which NTFS updates lazily — a folder's
+                    # mtime there can be stale. Stat folders directly.
+                    st = os.stat(e.path) if (is_dir and os.name == 'nt') else e.stat()
                 except OSError:
                     continue   # broken symlink etc.
                 out.append(Entry(e.name, is_dir, st.st_mtime, st.st_size))

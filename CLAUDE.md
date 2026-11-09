@@ -89,6 +89,7 @@ its fp, every subfolder's fp and — for subfolders without tracks directly
 inside (multi-disc albums, not-yet-albums) — every sub-subfolder's fp match.
 Cost: one listing per artist + one per such subfolder; a cold scan is exactly
 one listing per directory (asserted by tests). Any `None` fingerprint → rescan.
+`/api/scan?full=1` (the artist list's **↺ Full rescan**) ignores the cache.
 
 Errors: unreadable root → scan fails (502). Unreadable artist/album/disc →
 `errors`, last known version kept if any, artist marked `dirty`. `list_dir()`
@@ -161,7 +162,12 @@ reintroduce a server-side "re-check" pass.
 9. **`.hidden` is `display:none !important`.** Show an element by removing the
    class, not by setting `style.display` (the embed-done banner never appeared
    because of this).
-10. **smbd in tests:** on shutdown it SIGTERMs its whole process group. Start it
+10. **NTFS updates a folder's entry in its parent's index lazily**, so on
+    Windows `DirEntry.stat()` can return a stale mtime for subfolders;
+    `LocalStorage` stats folders directly there. SMB servers running on Windows
+    may show the same staleness in directory listings — **↺ Full rescan**
+    (`/api/scan?full=1`) is the escape hatch.
+11. **smbd in tests:** on shutdown it SIGTERMs its whole process group. Start it
     with `start_new_session=True` **and** `--no-process-group`, or it kills
     pytest (and without `--no-process-group` it fails to `setsid`).
 

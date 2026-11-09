@@ -180,8 +180,8 @@ def api_scan():
         return jsonify({'error': storage.error_message(e, root)}), 502
 
     prev = _library()
-    if not (prev and prev.get('root') == root):
-        prev = None
+    if not (prev and prev.get('root') == root) or request.args.get('full') == '1':
+        prev = None   # full rescan: re-read every folder, ignore the cache
 
     errors = []
     try:

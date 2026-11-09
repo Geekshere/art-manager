@@ -126,7 +126,7 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
     <strong>Art Manager</strong>
     <span id="hdr-path">no library</span>
     <span id="hdr-scanned"></span>
-    <button id="hdr-update-btn" onclick="doScan(true)" title="Rescan the library for new/changed files">⟳ Update Library</button>
+    <button id="hdr-update-btn" onclick="doScan(false)" title="Re-read the folders that changed since the last scan">⟳ Update Library</button>
     <span id="hdr-msg"></span>
     <a id="hdr-errors" href="#" class="warn hidden" style="font-size:11px" onclick="toggleScanErrors();return false"></a>
     <button onclick="showV('v-settings')">Settings</button>
@@ -173,7 +173,7 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
         <h2 style="margin:0">Artists</h2>
         <input type="text" id="al-filter" placeholder="Filter artists..." oninput="filterArtistList(this.value)">
         <span id="al-count" class="note"></span>
-        <button onclick="doScan(true)" style="margin-left:auto">↺ Rescan</button>
+        <button onclick="doScan(true)" style="margin-left:auto" title="Re-read every folder, ignoring the scan cache. Update Library only re-reads folders that changed.">↺ Full rescan</button>
         <button class="primary" id="wiz-start-btn" onclick="startWizard()">Start wizard →</button>
     </div>
     <table id="artist-list-table">
@@ -634,7 +634,7 @@ setInterval(()=>{
     if(lib && lib.scanned_at) document.getElementById('hdr-scanned').textContent='scanned '+fmtAgo(lib.scanned_at);
 }, 30000);
 
-async function doScan(force){
+async function doScan(full){
     const root=document.getElementById('inp-root').value.trim();
     if(!root) return;
     document.getElementById('setup-err').textContent='';
@@ -642,7 +642,7 @@ async function doScan(force){
     btn.disabled=true; btn.classList.remove('stale'); btn.textContent='⟳ Scanning…';
     hdrMsg('Scanning library...');
     try{
-        const d=await api('/api/scan?root='+enc(root));
+        const d=await api('/api/scan?root='+enc(root)+(full?'&full=1':''));
         applyLibrary(d);
         if(!navigateFromURL()) showArtistList();
         hdrMsg(d.errors&&d.errors.length?'Updated with errors':'✓ Updated', d.errors&&d.errors.length?'warn':'ok');
