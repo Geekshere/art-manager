@@ -117,15 +117,18 @@ def public_state():
 
 def _ssl_context():
     """
-    Certificates from certifi (shipped with the app): the standalone macOS app
-    can't see a certificate store, so the default context fails there with
-    CERTIFICATE_VERIFY_FAILED.
+    The system's certificates plus certifi's (shipped with the app). The
+    standalone macOS app sees no system store, so certifi is needed there;
+    antivirus software and company networks that re-sign HTTPS add their own
+    certificate to the system store, so that is kept too.
     """
+    ctx = ssl.create_default_context()
     try:
         import certifi
-        return ssl.create_default_context(cafile=certifi.where())
+        ctx.load_verify_locations(cafile=certifi.where())
     except Exception:
-        return ssl.create_default_context()
+        pass
+    return ctx
 
 def _open(req, timeout):
     return urllib.request.urlopen(req, timeout=timeout, context=_ssl_context())
