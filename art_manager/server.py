@@ -662,7 +662,13 @@ def prepare(argv=None):
 
     host = args.host or os.environ.get('ARTMGR_HOST') or \
         ('0.0.0.0' if cfg.get('allow_network') else '127.0.0.1')
-    wanted = args.port or int(os.environ.get('ARTMGR_PORT') or 0) or int(cfg.get('port') or 5000)
+    env_port = 0
+    if os.environ.get('ARTMGR_PORT'):
+        try:
+            env_port = port_number(os.environ['ARTMGR_PORT'])
+        except (ValueError, argparse.ArgumentTypeError):
+            print(f"  Ignoring ARTMGR_PORT={os.environ['ARTMGR_PORT']!r}: not a port number (1-65535)")
+    wanted = args.port or env_port or int(cfg.get('port') or 5000)
     port = _free_port(host, wanted)
 
     _auth['password'] = args.password or os.environ.get('ARTMGR_PASSWORD') or None

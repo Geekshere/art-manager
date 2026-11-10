@@ -51,6 +51,7 @@ art_manager/
   scan.py                  library scan, incremental fingerprint check, list_dir()
   artwork.py               find/write cover & artist images, embed into FLACs
   search.py                image sources + Provider registry + run_providers()
+  check.py                 fast FLAC/cover health check (no decoding), cached, library jobs
   server.py                Flask routes, path confinement, auth, embed jobs (SSE), CLI main()
   templates/index.html     the whole frontend: one SPA, vanilla JS, no build step
 packaging/                 PyInstaller spec + release notes for the standalone apps
@@ -160,6 +161,35 @@ settable via `app_password`) apply on the next start; `--host/--port/--password`
 override for one run. Busy port → next free one. After anything saves config,
 call `fillCfgForm()` so the Settings form never writes stale values back.
 
+### File check (`check.py`)
+
+Parses FLAC metadata blocks itself (skips PICTURE bodies, reads ≤4 KB of
+each) and reads only ~16–64 KB at the end: the last frame header (sync +
+CRC-8) must start a frame whose CRC-16 runs exactly to EOF, and its end sample
+must reach STREAMINFO's total → otherwise `truncated` / `damaged_end`. At most
+the last 3 candidate headers are tried, and the 512 KB fallback window is used
+only when no header was found at all (this is what keeps damaged files from
+being slow). Per-file results are cached in `check_cache.json` keyed by
+(size, fingerprint) + `CHECK_VERSION`; the last library report is
+`check_report.json`. `flac -t` deep check only for local paths. Bulk cover fix:
+`artwork.fix_album_covers()` (never overwrites an existing cover.jpg).
+
+### Speed
+
+Measured on 1,500 artists / 90,000 tracks: cold local scan 0.63 s, update
+0.11 s, file check ~2,000 files/s, library JSON 5.9 MB → 147 KB gzipped.
+`Storage.parallel` decides thread counts: **1 for local disks** (threads only
+add contention — 8 workers were ~9× slower), 8 for SMB/WebDAV (latency-bound).
+
+### Startup / app lifecycle
+
+`main()` → `_setup_logging()` (rotating `art-manager.log` in DATA_DIR) →
+`prepare()` → if the wanted port answers `/api/ping` as Art Manager, just open
+the browser and exit (second double-click) → otherwise start, and open the
+browser only after the port accepts connections (`open_browser`: `os.startfile`
+/ `open` / `xdg-open`). Errors keep the standalone app's window open.
+`/api/quit` (JSON POST only) stops the process. `/api/ping` needs no password.
+
 ### Server safety
 
 Binds 127.0.0.1 by default; when loopback-only, requests with a non-loopback
@@ -212,7 +242,13 @@ reintroduce a server-side "re-check" pass.
 12. **Bing/DuckDuckGo can return junk instead of failing** (degraded results for
     busy IPs). The relevance filter drops it; `ARTMGR_DEBUG=1` logs raw counts
     per engine, `=2` also the first raw result.
-13. **smbd in tests:** on shutdown it SIGTERMs its whole process group. Start it
+13. **More threads is not faster on local disks.** Use `storage.parallelism()`.
+14. **PyInstaller on Linux sets LD_LIBRARY_PATH** to its bundled libraries;
+    a browser started from the app inherits it and may silently fail.
+    `_fix_child_env()` restores the original value.
+15. **Defaults stored in `cfg` hide old files' versions:** `load_cfg()` marks a
+    settings file without `settings_version` as version 1 before migrating.
+16. **smbd in tests:** on shutdown it SIGTERMs its whole process group. Start it
     with `start_new_session=True` **and** `--no-process-group`, or it kills
     pytest (and without `--no-process-group` it fails to `setsid`).
 

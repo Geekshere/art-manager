@@ -18,12 +18,24 @@ It only ever touches artwork — never tags, genres or filenames.
   with a live progress bar. PNG/WebP artwork is converted to JPEG
 - **Start wizard** walks only the artists without `artist.jpg` and the albums
   that are missing a `cover.jpg` anywhere, then returns to the artist list
-- Fast incremental rescans: **Update Library** only re-reads folders that
-  changed (**↺ Full rescan** re-reads everything)
-- Missing-artwork report and an ignore list (`!Playlists`, NAS junk such as
-  `@eaDir` or `#recycle`)
+- **Missing report with quick fixes:** one click gives every album and disc
+  folder a `cover.jpg` from art that is already there (`folder.jpg`, CD 1's
+  cover, the art embedded in the tracks) — never replacing an existing one
+- **Check Files:** finds FLAC files that are cut off or damaged, files missing
+  title/artist/album/track-number tags or an embedded cover, unreadable or
+  low-resolution `cover.jpg` files, duplicate track numbers and more. It reads
+  only the start and end of each file (about 2,000 files a second on a local
+  disk) and remembers results, so a re-check only reads files that changed.
+  Optional full decode if the `flac` program is installed
+- Fast: a 1,500-artist / 90,000-track library scans in under a second locally;
+  **Update Library** only re-reads folders that changed (**↺ Full rescan**
+  re-reads everything)
+- Skips folders that aren't artists: `!Playlists`, NAS junk (`@eaDir`,
+  `#recycle`, …), your own ignore list, and any top-level folder with no albums
 - Folders that can't be read (a flaky share) are reported and retried next time
   instead of silently disappearing
+- Keyboard: **←** / **→** previous / next, **Esc** back to the artist list
+- **⏻ Quit** in the top bar stops the app
 
 ## Install and run
 
@@ -70,6 +82,20 @@ time just start the app. Change it any time under **Settings → Change library�
 Under **Settings → Access** you can let your phone or other computers on your
 network use Art Manager and set an app password (both saved; they take effect
 the next time you start it).
+
+### If nothing seems to happen
+
+- The app opens your browser by itself once it's ready (a second or two). If
+  it doesn't, open the address shown in its window — normally
+  <http://localhost:5000>. Starting the app again while it's running just
+  opens the browser to the running one.
+- **Windows:** a blue "Windows protected your PC" box → *More info* → *Run
+  anyway*. Some antivirus tools hold new downloads for a scan first.
+- **macOS:** "cannot be opened" → right-click the file → *Open* → *Open*.
+- **Linux:** file managers often won't run programs on double-click; start it
+  from a terminal: `chmod +x art-manager-linux-x64 && ./art-manager-linux-x64`.
+- If it stops with an error, the window stays open and shows it; it is also
+  saved in `art-manager.log` next to your settings (see below).
 
 ### Command line (optional)
 
@@ -152,8 +178,12 @@ every **Update Library**.
 Settings are saved to `config.json` (readable by your user only): next to
 `app.py` in a source checkout; otherwise in `%APPDATA%\art-manager` (Windows),
 `~/Library/Application Support/Art Manager` (macOS) or `~/.config/art-manager`
-(Linux). `ARTMGR_DATA_DIR` overrides the location. The app password is stored
-only as a salted hash. See
+(Linux) — they survive restarts and app updates, and **Settings** shows the
+exact location. `ARTMGR_DATA_DIR` overrides it. **Portable mode:** create a
+folder named `art-manager-data` next to the downloaded app and everything is
+kept there instead (handy on a USB stick). The app password is stored only as
+a salted hash. Also kept there: the scan cache (instant start), the last
+file-check report and its per-file results, and `art-manager.log`. See
 `config.example.json`.
 
 Secrets can come from environment variables instead; they override

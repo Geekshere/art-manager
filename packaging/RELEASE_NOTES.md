@@ -9,7 +9,13 @@
 Double-click it. A small window opens showing the address, and your browser
 opens Art Manager. The first time, it asks where your music is (a folder on
 this computer, a network share, or WebDAV); everything you enter is saved.
-Close the small window to stop Art Manager.
+Close the small window (or click **⏻ Quit** in the app) to stop Art Manager.
+Starting it again while it runs just opens your browser to it.
+
+Your settings are kept between restarts and updates (Settings shows where).
+For a portable setup, create a folder named `art-manager-data` next to the app.
+
+If nothing seems to happen, see "If nothing seems to happen" in the README.
 
 **First start warnings** (the apps are not code-signed):
 

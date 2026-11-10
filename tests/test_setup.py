@@ -118,3 +118,9 @@ def test_frozen_linux_child_env_restored(monkeypatch):
     monkeypatch.setenv('LD_LIBRARY_PATH', '/tmp/_MEIxyz')
     server._fix_child_env()                      # no original value: remove it entirely
     assert 'LD_LIBRARY_PATH' not in os.environ
+
+def test_bad_port_in_environment_ignored(client, monkeypatch, capsys):
+    monkeypatch.delenv('ARTMGR_HOST', raising=False)
+    monkeypatch.setenv('ARTMGR_PORT', '99999')
+    host, port, wanted, _ = server.prepare(['--no-browser'])
+    assert wanted == 5000 and 'Ignoring ARTMGR_PORT' in capsys.readouterr().out

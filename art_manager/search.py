@@ -13,7 +13,7 @@ from .config import cfg
 
 log = logging.getLogger('art_manager.search')
 
-_MB_UA = 'ArtManager/0.4 (+https://github.com/Geekshere/art-manager)'
+_MB_UA = 'ArtManager/0.5 (+https://github.com/Geekshere/art-manager)'
 
 # ── Size helpers ──────────────────────────────────────────────────────────────
 

@@ -230,6 +230,14 @@ the URL.
 - Every album folder **and every disc folder** (CD 1, CD 2, …) must contain a
   `cover.jpg`; only that name counts. Embeds write it everywhere, as JPEG.
 
+## Done after the original roadmap
+
+- Standalone apps for Windows/macOS/Linux (GitHub Releases), `uv tool install`,
+  guided setup screen with folder browser, saved access settings.
+- File check (damaged/truncated FLACs, tags, embedded art, cover quality).
+- Quick fixes for missing cover.jpg, keyboard shortcuts, Quit button.
+- Speed work (see CLAUDE.md → Speed).
+
 ## Ideas (not scheduled)
 
 - A keyed web-image provider (e.g. Brave Search API) for people who want
