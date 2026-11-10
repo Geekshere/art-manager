@@ -177,3 +177,81 @@ def artist_image(name, page=0):
         return []
     return [{'url': urls[0], 'thumb': urls[1], 'source': 'Redacted', 'quality': '',
              'label': a.get('name', name)}]
+
+
+# ── tagging ───────────────────────────────────────────────────────────────────
+
+RELEASE_TYPES = {1: 'Album', 3: 'Soundtrack', 5: 'EP', 6: 'Anthology', 7: 'Compilation', 9: 'Single',
+                 11: 'Live album', 13: 'Remix', 14: 'Bootleg', 15: 'Interview', 16: 'Mixtape', 17: 'Demo',
+                 18: 'Concert Recording', 19: 'DJ Mix', 21: 'Unknown'}
+
+def _unescape(s):
+    import html
+    return html.unescape(s or '')
+
+def search_groups(artist, album):
+    """Release groups matching an album, for the tag editor."""
+    params = {'groupname': album}
+    if artist:
+        params['artistname'] = artist
+    out = []
+    for g in (_get('browse', **params) or {}).get('results', [])[:10]:
+        rt = g.get('releaseType')
+        out.append({'id': g.get('groupId'), 'title': _unescape(g.get('groupName')), 'artist': _unescape(g.get('artist')),
+                    'year': g.get('groupYear'), 'type': RELEASE_TYPES.get(rt, rt) if isinstance(rt, int) else (rt or ''),
+                    'editions': len({(t.get('remasterTitle'), t.get('remasterYear'), t.get('media'))
+                                     for t in g.get('torrents', [])})})
+    return out
+
+def _file_names(file_list):
+    """'01 Song.flac{{{123}}}|||cover.jpg{{{4}}}' -> {'01 song.flac': 123, ...} (base names, lower case)."""
+    out = {}
+    for part in (file_list or '').split('|||'):
+        name, _, rest = part.partition('{{{')
+        if name:
+            out[_unescape(name).replace('\\', '/').rsplit('/', 1)[-1].lower()] = int(rest.rstrip('}') or 0) if rest.rstrip('}').isdigit() else 0
+    return out
+
+def group_tags(group_id, local_names=()):
+    """
+    Album-level tags from one release group, per edition (remaster), with how
+    well each edition's file list matches the local files (0..1).
+    """
+    resp = _get('torrentgroup', id=group_id) or {}
+    g, torrents = resp.get('group') or {}, resp.get('torrents') or []
+    artists = [_unescape(a.get('name')) for a in ((g.get('musicInfo') or {}).get('artists') or [])]
+    rt = g.get('releaseType')
+    base = {
+        'ALBUM': [_unescape(g.get('name'))],
+        'ALBUMARTIST': [' & '.join(artists)] if artists else [],
+        'ORIGINALDATE': [str(g.get('year'))] if g.get('year') else [],
+        'RELEASETYPE': [(RELEASE_TYPES.get(rt, '') if isinstance(rt, int) else str(rt or '')).lower()],
+    }
+    local = {n.lower() for n in local_names if n.lower().endswith('.flac')}
+    editions = {}
+    for t in torrents:
+        key = (t.get('remasterTitle') or '', t.get('remasterYear') or 0, t.get('remasterRecordLabel') or '',
+               t.get('remasterCatalogueNumber') or '', t.get('media') or '')
+        names = {n for n in _file_names(t.get('fileList')) if n.endswith('.flac')}
+        score = (len(local & names) / max(len(local), len(names))) if local and names else 0.0
+        e = editions.setdefault(key, {'score': 0.0, 'formats': set()})
+        e['score'] = max(e['score'], score)
+        e['formats'].add(f"{t.get('format', '')} {t.get('encoding', '')}".strip())
+    out = []
+    for (title, year, label, catno, media), e in editions.items():
+        note = ' '.join(x for x in (str(year) if year else '', _unescape(title)) if x).strip()
+        tags = dict(base)
+        tags.update({
+            'DATE': [str(year or g.get('year') or '')],
+            'LABEL': [_unescape(label or g.get('recordLabel') or '')],
+            'CATALOGNUMBER': [_unescape(catno or g.get('catalogueNumber') or '')],
+            'MEDIA': [media],
+            'MUSICBRAINZ_ALBUMCOMMENT': [note] if title else [],
+        })
+        out.append({'label': ' · '.join(x for x in (note or 'Original release', media,
+                                                     _unescape(label), _unescape(catno)) if x),
+                    'formats': sorted(e['formats']), 'match': round(e['score'], 2), 'edition': note if title else '',
+                    'tags': {k: [v for v in vals if v] for k, vals in tags.items()}})
+    out.sort(key=lambda x: -x['match'])
+    return {'title': _unescape(g.get('name')), 'year': g.get('year'), 'editions': out,
+            'url': f'https://redacted.sh/torrents.php?id={group_id}'}

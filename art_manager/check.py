@@ -27,8 +27,9 @@ A full decode (`flac -t`) is optional and only for local files.
 import io, os, shutil, struct, subprocess
 
 from . import storage
+from . import tags as tagmod
 
-CHECK_VERSION = 1          # bump to invalidate cached results when checks change
+CHECK_VERSION = 2          # bump to invalidate cached results when checks change
 MIN_COVER_PX = 500
 BIG_PICTURE = 4 * 1024 * 1024
 HEAD_READ = 64 * 1024
@@ -173,6 +174,7 @@ def check_flac_stream(f, size):
     off += 4
 
     streaminfo, tags, pictures = None, {}, []
+    raw_tags, tag_blocks = [], 0
     last = False
     while not last:
         hdr = r.read_at(off, 4)
@@ -201,22 +203,28 @@ def check_flac_stream(f, size):
         elif btype == 4:
             d = r.read_at(body_off, min(blen, 1024 * 1024))
             try:
-                p = 0
-                vlen = struct.unpack_from('<I', d, p)[0]; p += 4 + vlen
-                count = struct.unpack_from('<I', d, p)[0]; p += 4
-                for _ in range(count):
-                    ln = struct.unpack_from('<I', d, p)[0]; p += 4
-                    kv = d[p:p + ln].decode('utf-8', 'replace'); p += ln
-                    k, _, v = kv.partition('=')
-                    tags.setdefault(k.upper(), v)
+                raw_tags = tagmod.parse_vorbis_comment(d)
+                for k, v in raw_tags:
+                    tags.setdefault(tagmod.canonical(k), v)
             except struct.error:
                 issues.append(_issue('warn', 'bad_tags', 'The tag block is damaged'))
+            if tag_blocks:
+                issues.append(_issue('warn', 'two_tag_blocks', 'The file has more than one tag block (players read only one)'))
+            tag_blocks += 1
         elif btype == 6:
             d = r.read_at(body_off, min(blen, 4096))
             try:
                 ptype, mlen = struct.unpack_from('>II', d, 0)
                 mime = d[8:8 + mlen].decode('ascii', 'replace')
-                pictures.append({'type': ptype, 'mime': mime, 'size': blen})
+                q = 8 + mlen
+                dlen = struct.unpack_from('>I', d, q)[0]; q += 4 + dlen
+                width, height = struct.unpack_from('>II', d, q); q += 16
+                q += 4                                     # picture data length
+                magic = d[q:q + 4]
+                real = ('image/jpeg' if magic[:3] == b'\xff\xd8\xff' else 'image/png' if magic == b'\x89PNG'
+                        else 'image/gif' if magic[:3] == b'GIF' else 'image/webp' if magic == b'RIFF' else None)
+                pictures.append({'type': ptype, 'mime': mime, 'size': blen, 'real': real,
+                                 'width': width, 'height': height})
             except struct.error:
                 issues.append(_issue('warn', 'bad_picture', 'An embedded picture block is damaged'))
         off = body_off + blen
@@ -229,7 +237,8 @@ def check_flac_stream(f, size):
     info.update(sample_rate=si['sample_rate'], bits=si['bits'], channels=si['channels'],
                 seconds=round(si['total_samples'] / si['sample_rate'], 2) if si['sample_rate'] else None,
                 pictures=len(pictures), tags={k: tags[k] for k in
-                                              ('TITLE', 'ARTIST', 'ALBUM', 'TRACKNUMBER', 'DISCNUMBER') if k in tags})
+                                              ('TITLE', 'ARTIST', 'ALBUM', 'ALBUMARTIST', 'TRACKNUMBER', 'TRACKTOTAL',
+                                               'DISCNUMBER', 'DATE') if k in tags})
 
     audio_len = size - audio_off
     if audio_len < 16:
@@ -260,6 +269,29 @@ def check_flac_stream(f, size):
                              f'Embedded picture is {big[0]["size"] // (1024 * 1024)} MB (makes every track larger)'))
     if not si['total_samples']:
         issues.append(_issue('info', 'unknown_length', 'The file does not record its length'))
+
+    # odd tags: the same field under several names, duplicates, garbled text, ...
+    for level, code, msg in tagmod.tag_problems(raw_tags):
+        issues.append(_issue(level, code, msg))
+    # pictures that some players won't use
+    for p in pictures:
+        if p.get('real') and p['mime'].lower().replace('jpg', 'jpeg') != p['real']:
+            issues.append(_issue('warn', 'picture_mime', f'Embedded picture says {p["mime"] or "nothing"} but is really {p["real"]}'))
+            break
+    if pictures and not any(p['type'] == 3 for p in pictures):
+        issues.append(_issue('info', 'picture_type', "The embedded picture isn't marked as the front cover (some players skip it)"))
+    small = [p for p in pictures if p['type'] == 3 and 0 < min(p['width'], p['height']) < 300]
+    if small:
+        issues.append(_issue('info', 'small_picture', f'Embedded cover is only {small[0]["width"]}×{small[0]["height"]} px'))
+    # unusual audio formats
+    if si['channels'] == 1:
+        issues.append(_issue('info', 'mono', 'Mono recording'))
+    elif si['channels'] > 2:
+        issues.append(_issue('info', 'multichannel', f'{si["channels"]} channels (multichannel)'))
+    if si['sample_rate'] and si['sample_rate'] < 44100:
+        issues.append(_issue('info', 'low_rate', f'Low sample rate: {si["sample_rate"] / 1000:g} kHz'))
+    if si['bits'] not in (16, 24):
+        issues.append(_issue('info', 'odd_bits', f'Unusual bit depth: {si["bits"]}-bit'))
     return {'issues': issues, 'info': info}
 
 
@@ -369,10 +401,36 @@ def check_cover(path):
     return out
 
 
-def album_issues(file_results, album_name):
+def album_issues(file_results, album_name, extras=None, multi_disc=False):
     """Consistency checks across the tracks of one album."""
     out = []
     infos = [r['info'] for r in file_results if r.get('info')]
+    extras = extras or {}
+    # album artist: different values split the album in players
+    aas = [i.get('tags', {}).get('ALBUMARTIST', '').strip() for i in infos]
+    distinct = sorted({a for a in aas if a})
+    if len(distinct) > 1:
+        out.append(_issue('warn', 'albumartist_mismatch', 'Tracks have different album artists (players may split '
+                          'the album): ' + ', '.join(f'"{a}"' for a in distinct)[:200]))
+    elif distinct and '' in aas:
+        out.append(_issue('warn', 'albumartist_missing', f'{aas.count("")} track(s) have no album artist while '
+                          'the others do (players may split the album)'))
+    dates = sorted({i.get('tags', {}).get('DATE', '').strip()[:4] for i in infos} - {''})
+    if len(dates) > 1:
+        out.append(_issue('info', 'date_mismatch', 'Tracks have different years: ' + ', '.join(dates)))
+    if multi_disc and infos and any(not i.get('tags', {}).get('DISCNUMBER') for i in infos):
+        out.append(_issue('warn', 'no_discnumber', 'Multi-disc album, but some tracks have no disc number '
+                          '(players may mix the discs up)'))
+    totals = {i.get('tags', {}).get('TRACKTOTAL', '').strip() for i in infos} - {''}
+    if not multi_disc and len(totals) == 1 and totals != {str(len(infos))} and next(iter(totals)).isdigit():
+        out.append(_issue('info', 'tracktotal', f'Track total says {next(iter(totals))}, the folder has {len(infos)} tracks'))
+    if extras.get('junk'):
+        out.append(_issue('info', 'junk_files', 'Leftover files: ' + ', '.join(extras['junk'][:8])
+                          + (' …' if len(extras['junk']) > 8 else '')))
+    if extras.get('other_audio'):
+        kinds = sorted({n.rsplit('.', 1)[-1].upper() for n in extras['other_audio']})
+        out.append(_issue('warn', 'other_audio', f'Also contains {len(extras["other_audio"])} non-FLAC audio '
+                          f'file(s) ({", ".join(kinds)}) — players may show duplicate tracks'))
     albums = {i['tags'].get('ALBUM', '').strip() for i in infos if i.get('tags', {}).get('ALBUM')}
     if len(albums) > 1:
         out.append(_issue('warn', 'album_mismatch', 'Tracks disagree on the album name: ' +
@@ -440,19 +498,32 @@ def _save_cache():
             pass
 
 
+_JUNK = ('thumbs.db', 'desktop.ini', '.ds_store')
+_JUNK_EXT = ('.part', '.tmp', '.crdownload', '.!qb', '.bak')
+_OTHER_AUDIO = ('.mp3', '.m4a', '.aac', '.ogg', '.opus', '.wav', '.aif', '.aiff', '.ape', '.wv', '.wma', '.alac', '.dsf')
+
 def _album_tasks(album):
-    """[(kind, path, Entry)] for every FLAC and every cover.jpg the album must have."""
-    tasks, folders = [], [album['path']] + [d['path'] for d in album.get('disc_info', [])
-                                            if d['path'] != album['path']]
+    """
+    -> ([(kind, path, Entry)] for every FLAC and every required cover file,
+        {'junk': [...], 'other_audio': [...]} names found next to them)
+    """
+    tasks, extras = [], {'junk': [], 'other_audio': []}
+    folders = [album['path']] + [d['path'] for d in album.get('disc_info', []) if d['path'] != album['path']]
     for folder in folders:
         files, _ = list_dir(folder)
+        prefix = '' if folder == album['path'] else storage.basename(folder) + '/'
         for name, e in sorted(files.items()):
+            low = name.lower()
             if is_track(name):
                 tasks.append(('flac', storage.join(folder, name), e))
+            elif low.startswith('._') or low in _JUNK or low.endswith(_JUNK_EXT):
+                extras['junk'].append(prefix + name)
+            elif low.endswith(_OTHER_AUDIO):
+                extras['other_audio'].append(prefix + name)
         cov = find_cover(folder, files)
         if cov:
             tasks.append(('cover', cov, files[storage.basename(cov)]))
-    return tasks
+    return tasks, extras
 
 
 def _run_task(kind, path, entry, deep):
@@ -479,7 +550,7 @@ def _run_task(kind, path, entry, deep):
 def check_album(album, deep=False, pool=None):
     """Check one album -> {'issues': [...album-level...], 'files': [{name, path, kind, issues, info}]}."""
     try:
-        tasks = _album_tasks(album)
+        tasks, extras = _album_tasks(album)
     except Exception as e:
         return {'issues': [_issue('error', 'unreadable', storage.error_message(e, album['path']))], 'files': []}
     own = pool is None
@@ -495,7 +566,8 @@ def check_album(album, deep=False, pool=None):
     files = [{'name': rel(p), 'path': p, 'kind': k, 'issues': r['issues'], 'info': r.get('info', {})}
              for (k, p, _), r in zip(tasks, results)]
     flacs = [f for f in files if f['kind'] == 'flac']
-    return {'issues': album_issues(flacs, album['name']), 'files': files}
+    multi = any(d.get('path') != album['path'] for d in album.get('disc_info', []))
+    return {'issues': album_issues(flacs, album['name'], extras, multi), 'files': files}
 
 
 class CheckJob:

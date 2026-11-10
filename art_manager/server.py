@@ -1,15 +1,15 @@
 """Flask app: HTTP API, embed jobs (SSE), access control and the CLI entry point."""
-import argparse, concurrent.futures, hashlib, hmac, json, logging, os, posixpath, socket, string
+import argparse, concurrent.futures, hashlib, hmac, json, logging, os, posixpath, re, socket, string
 import subprocess, sys, threading, time, traceback, urllib.request, uuid, webbrowser
 
 from flask import Flask, Response, jsonify, render_template, request
 
-from . import __version__, check, config, storage, updater
+from . import __version__, check, config, storage, tags, updater
 from .artwork import (collect_album_flacs, decode_uploaded_image, dl_image, embed_into,
                       find_album_embedded, fix_album_covers, read_flac, to_data_url, to_jpeg,
                       write_artist_img, write_covers)
 from .config import cfg, is_ignored, load_cfg, parse_patterns, public_cfg, save_cfg
-from .scan import SCHEMA_VERSION, apply_ignore, client_view, list_dir, scan_library
+from .scan import SCHEMA_VERSION, apply_ignore, client_view, is_track, list_dir, scan_library
 from .search import run_providers
 
 app = Flask(__name__)
@@ -607,6 +607,243 @@ def api_fix_job(job_id):
     if request.method == 'DELETE':
         job.cancelled = True
     return jsonify(job.progress())
+
+# ── Tags ──────────────────────────────────────────────────────────────────────
+
+_FORMAT_WORD = re.compile(r'^(flac|mp3|aac|alac|ogg|opus|web|webdl|lossless|hi-?res|v0|v2|320|256|'
+                          r'\d{2}(bit|b)?|\d{2,3}(\.\d)?k(hz)?|\d{2}-\d{2,3}(\.\d)?|\d+bit|\d{2}bit-\d{2,3}(khz)?)$', re.I)
+
+def edition_hint(folder_name):
+    """'Album (2013 Remaster) [FLAC 24-96] (1994)' -> '2013 Remaster': bracket parts that describe an edition."""
+    keep = []
+    for part in re.findall(r'[\(\[\{]([^\)\]\}]+)[\)\]\}]', folder_name):
+        p = part.strip()
+        words = [w for w in re.split(r'[\s,/_]+', p) if w]
+        if not words or re.fullmatch(r'\d{4}', p) or all(_FORMAT_WORD.match(w) for w in words):
+            continue   # a bare year or only format info (FLAC 24-96, WEB, 320, ...)
+        keep.append(p)
+    return ', '.join(keep)
+
+def base_title(folder_name):
+    return re.sub(r'\s+', ' ', re.sub(r'[\(\[\{][^\)\]\}]*[\)\]\}]', '', folder_name)).strip().casefold()
+
+def _album_arg(d):
+    album = {'name': d.get('name') or storage.basename(d.get('path', '')), 'path': d.get('path', ''),
+             'disc_info': d.get('disc_info') or []}
+    err = _check_paths(album['path'], *[x.get('path', '') for x in album['disc_info']])
+    return album, err
+
+def _album_tracks(album):
+    """Local tracks in play order: [{'path', 'name', 'folder': index of its disc folder}]."""
+    folders = [album['path']] + [x['path'] for x in album['disc_info'] if x.get('path') != album['path']]
+    out = []
+    base = album['path'].rstrip('/\\')
+    for i, folder in enumerate(folders):
+        files, _ = list_dir(folder)
+        for name in sorted(files, key=str.lower):
+            if is_track(name):
+                p = storage.join(folder, name)
+                out.append({'path': p, 'name': p[len(base) + 1:].replace('\\', '/'), 'folder': i})
+    return out
+
+def map_tracks(local, remote):
+    """
+    Pair local tracks with release tracks. -> ([remote index or None per local track], how).
+    1. by the disc/track numbers already in the files, when they're complete and unique;
+    2. folder by folder (CD 1 -> disc 1, ...) when the counts of discs match;
+    3. in order.
+    """
+    idx = {(t['disc'], t['position']): i for i, t in enumerate(remote)}
+    pairs = []
+    for t in local:
+        tn = (t['tags'].get('TRACKNUMBER') or [''])[0].split('/')[0].strip()
+        dn = (t['tags'].get('DISCNUMBER') or ['1'])[0].split('/')[0].strip() or '1'
+        pairs.append((int(dn), int(tn)) if tn.isdigit() and dn.isdigit() else None)
+    if all(pairs) and len(set(pairs)) == len(pairs) and all(p in idx for p in pairs):
+        return [idx[p] for p in pairs], 'by the track and disc numbers in your files'
+    folders = sorted({t['folder'] for t in local})
+    discs = sorted({t['disc'] for t in remote})
+    if len(folders) > 1 and len(folders) == len(discs):
+        out, seen = [], {}
+        for t in local:
+            fi = folders.index(t['folder'])
+            k = seen[fi] = seen.get(fi, -1) + 1          # k-th track of this folder
+            same = [i for i, r in enumerate(remote) if r['disc'] == discs[fi]]
+            out.append(same[k] if k < len(same) else None)
+        return out, 'disc folder by disc folder, in file-name order'
+    return [i if i < len(remote) else None for i in range(len(local))], 'in file-name order'
+
+@app.route('/api/tags/read', methods=['POST'])
+def api_tags_read():
+    album, err = _album_arg(request.json or {})
+    if err: return err
+    try:
+        tracks = _album_tracks(album)
+    except Exception as e:
+        return jsonify({'error': storage.error_message(e, album['path'])}), 502
+    def one(t):
+        try:
+            raw = tags.read_raw(t['path'])
+        except Exception as e:
+            return dict(t, error=storage.error_message(e, t['path']), raw=[], tags={}, notes=[], problems=[])
+        norm, notes = tags.normalize(raw)
+        return dict(t, raw=raw, tags=norm, notes=notes,
+                    problems=[{'level': l, 'code': c, 'msg': m} for l, c, m in tags.tag_problems(raw)])
+    out = list(_meta_pool.map(one, tracks))
+    siblings = []
+    lib = _library() or {}
+    for a in lib.get('artists', []):
+        if any(al['path'] == album['path'] for al in a['albums']):
+            siblings = [{'name': al['name'], 'path': al['path'], 'hint': edition_hint(al['name'])}
+                        for al in a['albums'] if al['path'] != album['path']
+                        and base_title(al['name']) == base_title(album['name'])]
+    return jsonify({'tracks': out, 'edition_hint': edition_hint(album['name']), 'siblings': siblings,
+                    'backups': tags.list_backups(album['path'])[:10],
+                    'redacted': bool(cfg.get('redacted_key'))})
+
+@app.route('/api/tags/lookup', methods=['POST'])
+def api_tags_lookup():
+    d = request.json or {}
+    try:
+        if d.get('source') == 'redacted':
+            from . import redacted
+            if not redacted.enabled():
+                return jsonify({'error': 'Add your Redacted API key in Settings first'}), 400
+            return jsonify({'results': redacted.search_groups(d.get('artist', ''), d.get('album', ''))})
+        from . import musicbrainz
+        return jsonify({'results': musicbrainz.search_releases(d.get('artist', ''), d.get('album', ''),
+                                                               d.get('track_count'), d.get('hint', ''))})
+    except Exception as e:
+        return jsonify({'error': f'Lookup failed: {e}'}), 502
+
+@app.route('/api/tags/release', methods=['POST'])
+def api_tags_release():
+    """Proposed tags for every local track from one MusicBrainz release / Redacted group."""
+    d = request.json or {}
+    album, err = _album_arg(d)
+    if err: return err
+    try:
+        local = _album_tracks(album)
+        for t in local:
+            try: t['tags'] = tags.normalize(tags.read_raw(t['path']))[0]
+            except Exception: t['tags'] = {}
+        if d.get('source') == 'redacted':
+            from . import redacted
+            g = redacted.group_tags(d['id'], [storage.basename(t['path']) for t in local])
+            return jsonify(dict(g, source='redacted'))
+        from . import musicbrainz
+        rel = musicbrainz.release_tags(d['id'])
+    except Exception as e:
+        return jsonify({'error': f'Lookup failed: {e}'}), 502
+    mapping, how = map_tracks(local, rel['tracks'])
+    proposals = []
+    for t, ri in zip(local, mapping):
+        r = rel['tracks'][ri] if ri is not None else None
+        proposals.append({'path': t['path'], 'name': t['name'], 'matched': r is not None,
+                          'remote': {'disc': r['disc'], 'position': r['position'], 'length': r['length']} if r else None,
+                          'tags': dict(rel['album'], **(r['tags'] if r else {}))})
+    note = ''
+    if len(local) != len(rel['tracks']):
+        note = f'The release has {len(rel["tracks"])} tracks, the folder has {len(local)} — check the pairing.'
+    return jsonify({'source': 'musicbrainz', 'summary': rel['summary'], 'edition': rel['edition'],
+                    'how': how, 'note': note, 'proposals': proposals})
+
+@app.route('/api/tags/apply', methods=['POST'])
+def api_tags_apply():
+    """Write complete new tags per file (a backup of the old ones is kept for undo)."""
+    if not request.is_json:
+        return jsonify({'error': 'JSON required'}), 400
+    d = request.json
+    changes = [{'path': c['path'], 'tags': {tags.canonical(k): [str(v) for v in (vals if isinstance(vals, list) else [vals]) if str(v).strip()]
+                                            for k, vals in (c.get('tags') or {}).items()}}
+               for c in d.get('changes', [])]
+    if (err := _check_paths(*[c['path'] for c in changes])):
+        return err
+    if not all(c['path'].lower().endswith('.flac') for c in changes):
+        return jsonify({'error': 'Only FLAC files can be tagged'}), 400
+    try:
+        backup, errors = tags.apply(changes, label=d.get('label', 'Tag edit'))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify({'backup': backup, 'errors': errors, 'written': len(changes) - len(errors)})
+
+@app.route('/api/tags/apply-raw', methods=['POST'])
+def api_tags_apply_raw():
+    """One file, exactly the given FIELD=value pairs (Advanced). Backed up like any other change."""
+    if not request.is_json:
+        return jsonify({'error': 'JSON required'}), 400
+    d = request.json
+    path, pairs = d.get('path', ''), [(str(k), str(v)) for k, v in d.get('pairs', [])]
+    if (err := _check_paths(path)):
+        return err
+    bad = [k for k, _ in pairs if not k or not all(0x20 <= ord(c) <= 0x7D and c != '=' for c in k)]
+    if bad:
+        return jsonify({'error': f'Invalid field name: {bad[0]!r} (plain letters, digits, spaces, _ only)'}), 400
+    backup, errors = tags.apply([{'path': path, 'tags': pairs}], label=f'Raw edit: {storage.basename(path)}')
+    return jsonify({'backup': backup, 'errors': errors})
+
+@app.route('/api/tags/undo', methods=['POST'])
+def api_tags_undo():
+    if not request.is_json:
+        return jsonify({'error': 'JSON required'}), 400
+    try:
+        b, errors = tags.undo((request.json or {}).get('id', ''))
+    except (ValueError, OSError) as e:
+        return jsonify({'error': f'Cannot undo: {e}'}), 400
+    if (err := _check_paths(*[x['path'] for x in b['files']])):
+        return err
+    return jsonify({'restored': len(b['files']) - len(errors), 'errors': errors, 'label': b.get('label', '')})
+
+_cleanup_jobs = {}
+
+class _CleanupJob:
+    def __init__(self, albums):
+        self.id = uuid.uuid4().hex[:12]
+        self.albums, self.done, self.files, self.status, self.errors = albums, 0, 0, 'running', []
+        self.backups, self.current = [], ''
+
+    def progress(self):
+        return {'id': self.id, 'status': self.status, 'done': self.done, 'total': len(self.albums),
+                'files': self.files, 'current': self.current, 'errors': self.errors[:50], 'backups': self.backups}
+
+    def run(self):
+        for al in self.albums:
+            self.current = al.get('label') or al['path']
+            try:
+                changes = []
+                for t in _album_tracks(al):
+                    raw = tags.read_raw(t['path'])
+                    norm, _ = tags.normalize(raw)
+                    if tags.as_pairs(norm) != raw:
+                        changes.append({'path': t['path'], 'tags': norm})
+                if changes:
+                    bid, errs = tags.apply(changes, label=f'Clean up tags: {self.current}')
+                    self.backups.append(bid); self.errors += errs
+                    self.files += len(changes) - len(errs)
+            except Exception as e:
+                self.errors.append({'path': al['path'], 'error': storage.error_message(e, al['path'])})
+            self.done += 1
+        self.status = 'done'
+
+@app.route('/api/tags/cleanup', methods=['POST'])
+def api_tags_cleanup():
+    """Bulk: normalise field names / duplicates in every listed album (backups kept)."""
+    d = request.json or {}
+    albums = []
+    for a in d.get('albums', []):
+        al, err = _album_arg(a)
+        if err: return err
+        al['label'] = a.get('label', '')
+        albums.append(al)
+    job = _CleanupJob(albums)
+    _cleanup_jobs[job.id] = job
+    threading.Thread(target=job.run, daemon=True, name='tag-cleanup').start()
+    return jsonify(job.progress())
+
+@app.route('/api/tags/cleanup/<job_id>')
+def api_tags_cleanup_job(job_id):
+    job = _cleanup_jobs.get(job_id)
+    return jsonify(job.progress()) if job else (jsonify({'error': 'Unknown job'}), 404)
 
 # ── Embed jobs ────────────────────────────────────────────────────────────────
 

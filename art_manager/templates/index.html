@@ -87,6 +87,19 @@ h3 { font-size:12px; font-weight:700; color:#555; text-transform:uppercase; lett
 .track-flag { font-size:11px; flex-shrink:0; cursor:help; }
 #chk-summary { margin:8px 0; font-size:12px; }
 
+/* Tag editor */
+#v-tags h3 { margin-top:16px; }
+.tg-table { border-collapse:collapse; font-size:12px; width:100%; }
+.tg-table th { text-align:left; border-bottom:2px solid #ccc; padding:4px 6px; white-space:nowrap; }
+.tg-table td { border-bottom:1px solid #eee; padding:3px 6px; vertical-align:top; }
+.tg-old { color:#999; text-decoration:line-through; }
+.tg-new { color:#0a5a0a; font-weight:600; }
+.tg-same { color:#555; }
+.tg-results div { padding:5px 8px; border-bottom:1px solid #eee; cursor:pointer; font-size:12px; }
+.tg-results div:hover, .tg-results div.on { background:#f1f6ff; }
+.tg-box { border:1px solid #ddd; border-radius:4px; padding:10px 12px; margin:8px 0; max-width:1100px; }
+.tg-raw { width:100%; min-height:220px; font-family:ui-monospace,monospace; font-size:12px; }
+
 /* Three-column layout */
 .three-col { display:grid; grid-template-columns:230px 1fr 270px; gap:14px; align-items:start; }
 
@@ -394,7 +407,8 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
         <!-- RIGHT -->
         <div>
             <h3 style="display:flex;align-items:center;gap:6px">Tracks <span id="alb-track-count" class="note"></span>
-                <button id="alb-check-btn" style="margin-left:auto;font-size:11px;text-transform:none;letter-spacing:0" onclick="checkThisAlbum()" title="Look for damaged files, missing tags and bad covers">Check these files</button></h3>
+                <button style="font-size:11px;text-transform:none;letter-spacing:0;margin-left:auto" onclick="openTags()" title="View, clean up and fill in the tags of these tracks">Tags…</button>
+                <button id="alb-check-btn" style="font-size:11px;text-transform:none;letter-spacing:0" onclick="checkThisAlbum()" title="Look for damaged files, missing tags and bad covers">Check these files</button></h3>
             <div id="alb-check-res" class="note" style="margin:0 0 6px"></div>
             <div id="alb-tracks"><div style="padding:8px;color:#888"><span class="spinner"></span> loading...</div></div>
         </div>
@@ -516,6 +530,72 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
         <label><input type="checkbox" class="chk-lvl" value="info" onchange="saveLevels()"> <span class="lvl-info">Info</span></label>
     </div>
     <div id="chk-results"></div>
+</div>
+
+<!-- TAG EDITOR -->
+<div id="v-tags" class="page hidden">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap">
+        <h2 style="margin:0">Tags — <span id="tg-title"></span></h2>
+        <button onclick="closeTags()">← Back to album</button>
+        <span id="tg-status" class="note"></span>
+    </div>
+    <p class="note" style="max-width:820px">Nothing is written until you click <b>Save</b>. Every save keeps a backup, so you can undo it below.
+        When saving, field names are tidied up (e.g. <code>album_artist</code> and <code>ALBUM ARTIST</code> become one <code>ALBUMARTIST</code>).</p>
+
+    <div class="tg-box" id="tg-problems"></div>
+
+    <h3>Edition</h3>
+    <div class="tg-box">
+        <div id="tg-siblings" class="note"></div>
+        <div class="cfg-row"><label>Edition note</label><input type="text" id="tg-edition" style="width:300px" placeholder="e.g. 2013 Remaster, Deluxe Edition" oninput="tgRender()"></div>
+        <div class="cfg-row"><label>Write it to</label>
+            <label style="min-width:0;display:flex;gap:4px;align-items:center;color:#333"><input type="checkbox" id="tg-ed-mb" checked onchange="tgRender()"> edition / version field (MUSICBRAINZ_ALBUMCOMMENT, as Picard does)</label></div>
+        <div class="cfg-row"><label></label><label style="min-width:0;display:flex;gap:4px;align-items:center;color:#333"><input type="checkbox" id="tg-ed-comment" onchange="tgRender()"> COMMENT</label>
+            <label style="min-width:0;display:flex;gap:4px;align-items:center;color:#333;margin-left:12px"><input type="checkbox" id="tg-ed-album" onchange="tgRender()"> add to the album title — “Album (note)”</label></div>
+    </div>
+
+    <h3>Look up</h3>
+    <div class="tg-box">
+        <div class="cfg-row" style="flex-wrap:wrap">
+            <select id="tg-source"><option value="musicbrainz">MusicBrainz</option><option value="redacted">Redacted</option></select>
+            <input type="text" id="tg-q-artist" style="width:180px" placeholder="artist">
+            <input type="text" id="tg-q-album" style="width:220px" placeholder="album" onkeydown="if(event.key==='Enter')tgSearch()">
+            <button class="primary" onclick="tgSearch()">Search</button>
+            <span id="tg-search-status" class="note"></span>
+        </div>
+        <div id="tg-results" class="tg-results" style="max-height:260px;overflow:auto"></div>
+        <div id="tg-editions" class="tg-results"></div>
+        <div id="tg-release-note" class="note" style="margin-top:6px"></div>
+    </div>
+
+    <h3>Changes <span class="note" id="tg-change-count"></span></h3>
+    <div class="tg-box">
+        <label class="note" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="tg-only-empty" onchange="tgRender()"> only fill fields that are empty now</label>
+        <div id="tg-diff"></div>
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+            <button class="primary" id="tg-save" onclick="tgSave()">Save</button>
+            <button onclick="tgReset()">Discard changes</button>
+            <span id="tg-save-status" class="note"></span>
+        </div>
+    </div>
+
+    <h3>Advanced</h3>
+    <div class="tg-box">
+        <div class="cfg-row"><label>Set on all tracks</label><input type="text" id="tg-set-key" style="width:150px" placeholder="FIELD, e.g. GENRE"><input type="text" id="tg-set-val" style="width:240px" placeholder="value"><button onclick="tgManualSet()">Add change</button></div>
+        <div class="cfg-row"><label>Remove from all</label><input type="text" id="tg-del-key" style="width:150px" placeholder="FIELD, e.g. COMMENT"><button onclick="tgManualRemove()">Add change</button></div>
+        <div class="cfg-row" style="align-items:flex-start"><label>One track, raw</label>
+            <div style="flex:1;max-width:620px">
+                <select id="tg-raw-track" onchange="tgRawLoad()" style="max-width:100%"></select>
+                <textarea id="tg-raw" class="tg-raw" spellcheck="false" placeholder="FIELD=value, one per line"></textarea>
+                <button onclick="tgRawSave()">Save this track</button> <span class="note">exactly as typed (field names are not tidied)</span>
+            </div></div>
+    </div>
+
+    <h3>Current tags</h3>
+    <div style="overflow:auto"><table class="tg-table" id="tg-current"></table></div>
+
+    <h3>Undo</h3>
+    <div id="tg-backups" class="note"></div>
 </div>
 
 <!-- MISSING -->
@@ -644,12 +724,12 @@ function navigateFromURL(){
 window.addEventListener('popstate',()=>navigateFromURL());
 
 // ── Views ─────────────────────────────────────────────────────────────────
-const VIEWS=['v-setup','v-artists','step-artist','step-album','v-settings','v-missing','v-check'];
+const VIEWS=['v-setup','v-artists','step-artist','step-album','v-settings','v-missing','v-check','v-tags'];
 function showV(id){
     VIEWS.forEach(v=>document.getElementById(v).classList.add('hidden'));
     document.getElementById(id).classList.remove('hidden');
     document.getElementById('wiz-bar').classList.toggle('hidden',!lib||(id!=='step-artist'&&id!=='step-album'));
-    if(!['v-settings','v-missing','v-check'].includes(id)) prevView=id;
+    if(!['v-settings','v-missing','v-check','v-tags'].includes(id)) prevView=id;
 }
 function showArtistList(){ activeQueue=fullQueue; history.pushState({},'','/'); renderArtistList(); showV('v-artists'); }
 function goBack(){ showV(prevView||'v-setup'); }
@@ -1719,12 +1799,36 @@ function renderCheckReport(){
     }).filter(a=>a.albumIssues.length||a.files.length).sort((x,y)=>x.worst-y.worst||x.artist.localeCompare(y.artist));
     if(!albums.length){ out.innerHTML='<p class="ok">Nothing to report'+(show.size<3?' at the selected levels':'')+'. ✓</p>'; return; }
     const line=i=>'<div class="chk-row"><span class="lvl lvl-'+i.level+'">'+i.level+'</span>'+esc(i.msg)+'</div>';
-    out.innerHTML=albums.map((a,k)=>'<div class="chk-album"><div class="chk-album-hdr"><span>'+esc(a.artist)+' — '+esc(a.album)+'</span>'+
-        '<button style="margin-left:auto;font-size:11px" data-open="'+k+'">Open album →</button></div>'+
+    const CLEAN=['tag_spellings','dup_values','tag_whitespace','empty_tag','key_case','tag_conflict'];
+    const tidy=(r.albums||[]).filter(a=>a.files.some(f=>f.issues.some(i=>CLEAN.includes(i.code))));
+    const bulk=tidy.length?'<div class="tg-box" style="margin:6px 0"><button class="primary" onclick="bulkTagCleanup()">Clean up tags in '+tidy.length+' album'+(tidy.length===1?'':'s')+'</button> '+
+        '<span class="note">merges field names written several ways (ALBUMARTIST / album_artist …), removes duplicate and empty values. Backups are kept — undo from each album\'s Tags page.</span> <span id="bulk-tag-status" class="note"></span></div>':'';
+    out.innerHTML=bulk+albums.map((a,k)=>'<div class="chk-album"><div class="chk-album-hdr"><span>'+esc(a.artist)+' — '+esc(a.album)+'</span>'+
+        '<button style="margin-left:auto;font-size:11px" data-tags="'+k+'">Tags…</button><button style="font-size:11px" data-open="'+k+'">Open album →</button></div>'+
         a.albumIssues.map(line).join('')+
         a.files.map(f=>'<div class="chk-row chk-file">'+esc(f.name)+'</div>'+f.issues.map(i=>line(i).replace('chk-row','chk-row" style="padding-left:28px')).join('')).join('')+
         '</div>').join('');
     out.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>openAlbumByPath(albums[+b.dataset.open].path)));
+    out.querySelectorAll('[data-tags]').forEach(b=>b.addEventListener('click',()=>{ openAlbumByPath(albums[+b.dataset.tags].path); openTags(); }));
+    window._tidyAlbums=tidy;
+}
+async function bulkTagCleanup(){
+    const albums=(window._tidyAlbums||[]).map(a=>{
+        for(const ar of lib.artists){ const al=ar.albums.find(x=>x.path===a.path); if(al) return {path:al.path,name:al.name,disc_info:al.disc_info,label:ar.name+' — '+al.name}; }
+        return null;
+    }).filter(Boolean);
+    if(!albums.length||!confirm('Clean up the tags of '+albums.length+' album'+(albums.length===1?'':'s')+'? Backups are kept.')) return;
+    const st=document.getElementById('bulk-tag-status');
+    try{
+        const job=await api('/api/tags/cleanup',{method:'POST',body:JSON.stringify({albums})});
+        const tick=async()=>{
+            const d=await api('/api/tags/cleanup/'+job.id);
+            st.innerHTML=d.status==='running'?'<span class="spinner"></span> '+d.done+' / '+d.total+' albums · '+esc(d.current||''):
+                (d.errors.length?'<span class="warn">Cleaned '+d.files+' files; '+d.errors.length+' failed</span>':'<span class="ok">✓ Cleaned up '+d.files+' files. Run the check again to see the result.</span>');
+            if(d.status==='running') setTimeout(tick,600);
+        };
+        tick();
+    }catch(e){ st.textContent='✗ '+e.message; }
 }
 function openAlbumByPath(path){
     if(!lib) return;
@@ -1762,6 +1866,229 @@ async function checkThisAlbum(){
             other.map(i=>'<div><span class="lvl lvl-'+i.level+'">'+i.level+'</span>'+esc(i.msg)+'</div>').join('');
     }catch(e){ if(gen===stepGen) res.textContent='✗ '+e.message; }
     finally{ btn.disabled=false; }
+}
+
+// ── Tag editor ────────────────────────────────────────────────────────────
+const TG_TRACK_FIELDS=['TITLE','ARTIST','ARTISTSORT','TRACKNUMBER','TRACKTOTAL','DISCNUMBER','DISCSUBTITLE','ISRC',
+    'MUSICBRAINZ_TRACKID','MUSICBRAINZ_RELEASETRACKID','MUSICBRAINZ_ARTISTID'];
+const TG_DETAIL=f=>/^MUSICBRAINZ_|SORT$|^ISRC$|^BARCODE$|^SCRIPT$|^LANGUAGE$|^RELEASESTATUS$/.test(f);
+const TG_NAMES={TITLE:'Title',ARTIST:'Artist',ALBUM:'Album',ALBUMARTIST:'Album artist',TRACKNUMBER:'Track',TRACKTOTAL:'Track total',
+    DISCNUMBER:'Disc',DISCTOTAL:'Disc total',DATE:'Date',ORIGINALDATE:'Original date',LABEL:'Label',CATALOGNUMBER:'Catalog #',
+    MEDIA:'Media',RELEASETYPE:'Release type',RELEASECOUNTRY:'Country',GENRE:'Genre',COMMENT:'Comment',
+    MUSICBRAINZ_ALBUMCOMMENT:'Edition / version',DISCSUBTITLE:'Disc subtitle'};
+let tg=null;   // {album, data (from /api/tags/read), props {path: tags}, fieldsOn {F: bool}, tracksOn {path: bool}, set {}, remove []}
+const tgName=f=>TG_NAMES[f]||f;
+const tgVal=v=>(v||[]).join('; ');
+
+async function openTags(){
+    const artist=lib.artists[curAI], al=artist.albums[curALI];
+    tg={album:al, artist, data:null, props:null, source:null, fieldsOn:{}, tracksOn:{}, set:{}, remove:[], gen:stepGen};
+    setEl('tg-title',artist.name+' — '+al.name);
+    setVal('tg-q-artist',artist.name); setVal('tg-q-album',al.name.replace(/\s*[\(\[\{][^\)\]\}]*[\)\]\}]/g,'').trim()||al.name);
+    document.getElementById('tg-source').value='musicbrainz';
+    ['tg-results','tg-editions','tg-release-note','tg-search-status','tg-save-status'].forEach(id=>document.getElementById(id).innerHTML='');
+    showV('v-tags');
+    await tgLoad();
+}
+function closeTags(){ showV('step-album'); }
+async function tgLoad(){
+    setEl('tg-status','reading tags…');
+    try{
+        const d=await api('/api/tags/read',{method:'POST',body:JSON.stringify({name:tg.album.name,path:tg.album.path,disc_info:tg.album.disc_info})});
+        tg.data=d; setEl('tg-status','');
+        tg.data.tracks.forEach(t=>{ if(!(t.path in tg.tracksOn)) tg.tracksOn[t.path]=true; });
+        setVal('tg-edition', tg.editionTouched?val('tg-edition'):(d.edition_hint||''));
+        document.querySelector('#tg-source option[value=redacted]').disabled=!d.redacted;
+        document.getElementById('tg-siblings').innerHTML=d.siblings.length?'Other editions of this album in your library: '+
+            d.siblings.map(x=>'<b>'+esc(x.name)+'</b>'+(x.hint?' ('+esc(x.hint)+')':'')).join(', ')+'. An edition note keeps them apart in your player.':
+            (d.edition_hint?'Suggested from the folder name.':'');
+        tgRenderProblems(); tgRenderCurrent(); tgRenderBackups(); tgRawFill(); tgRender();
+    }catch(e){ setEl('tg-status','✗ '+e.message); }
+}
+function tgRenderProblems(){
+    const box=document.getElementById('tg-problems');
+    const probs={}, notes=new Set();
+    tg.data.tracks.forEach(t=>{ (t.problems||[]).forEach(p=>{ (probs[p.msg]=probs[p.msg]||{...p,n:0}).n++; }); (t.notes||[]).forEach(n=>notes.add(n)); });
+    const list=Object.values(probs).sort((a,b)=>(a.level==='warn'?0:1)-(b.level==='warn'?0:1));
+    const cleanable=tg.data.tracks.some(t=>t.notes&&t.notes.length);
+    box.innerHTML=(list.length?'<b>Tag problems</b>'+list.map(p=>'<div class="chk-row"><span class="lvl lvl-'+p.level+'">'+p.level+'</span>'+esc(p.msg)+(p.n>1?' <span class="note">('+p.n+' tracks)</span>':'')+'</div>').join(''):'<span class="ok">✓ No tag problems found.</span>')+
+        (cleanable?'<div style="margin-top:8px"><button class="primary" onclick="tgCleanup()">Clean up tags</button> <span class="note">tidies field names and removes duplicate / empty values — preview below before saving</span></div>':'');
+}
+function tgCleanup(){ tg.cleanupOnly=true; tgRender(); document.getElementById('tg-diff').scrollIntoView({behavior:'smooth'}); }
+function tgRenderCurrent(){
+    const cols=['DISCNUMBER','TRACKNUMBER','TITLE','ARTIST','ALBUM','ALBUMARTIST','DATE','GENRE'];
+    document.getElementById('tg-current').innerHTML='<tr><th>File</th>'+cols.map(c=>'<th>'+esc(tgName(c))+'</th>').join('')+'<th></th></tr>'+
+        tg.data.tracks.map(t=>'<tr><td class="chk-file">'+esc(t.name)+'</td>'+cols.map(c=>'<td>'+esc(tgVal(t.tags[c]))+'</td>').join('')+
+        '<td>'+((t.problems||[]).filter(p=>p.level!=='info').length?'<span class="lvl-warn" title="'+esc(t.problems.map(p=>p.msg).join('\n')).replace(/"/g,'&quot;')+'">⚠</span>':'')+(t.error?'<span class="lvl-error" title="'+esc(t.error)+'">✗</span>':'')+'</td></tr>').join('');
+}
+function tgRenderBackups(){
+    const b=tg.data.backups||[];
+    document.getElementById('tg-backups').innerHTML=b.length?b.map(x=>'<div style="margin:3px 0">'+esc(fmtDate(x.created))+' — '+esc(x.label||'Tag edit')+
+        ' ('+x.files+' file'+(x.files===1?'':'s')+') <button style="font-size:11px" onclick="tgUndo(\''+x.id+'\')">Undo</button></div>').join(''):'Nothing to undo yet.';
+}
+async function tgUndo(id){
+    if(!confirm('Put the tags back as they were before this change?')) return;
+    try{ const r=await api('/api/tags/undo',{method:'POST',body:JSON.stringify({id})}); toast('Restored '+r.restored+' file'+(r.restored===1?'':'s'),4000); await tgLoad(); }
+    catch(e){ alert(e.message); }
+}
+
+async function tgSearch(){
+    const src=document.getElementById('tg-source').value;
+    const st=document.getElementById('tg-search-status'); st.innerHTML='<span class="spinner"></span> searching…';
+    document.getElementById('tg-results').innerHTML=''; document.getElementById('tg-editions').innerHTML='';
+    try{
+        const d=await api('/api/tags/lookup',{method:'POST',body:JSON.stringify({source:src,artist:val('tg-q-artist'),album:val('tg-q-album'),track_count:tg.data.tracks.length,hint:val('tg-edition')||tg.data.edition_hint||''})});
+        st.textContent=d.results.length?d.results.length+' result'+(d.results.length===1?'':'s')+' — pick one':'Nothing found';
+        const box=document.getElementById('tg-results');
+        box.innerHTML=d.results.map((r,i)=>'<div data-i="'+i+'">'+(src==='musicbrainz'?
+            '<b>'+esc(r.title)+'</b> — '+esc(r.artist)+' <span class="note">'+esc([r.date,r.country,r.format,r.label,r.catno,r.tracks+' tracks'].filter(Boolean).join(' · '))+'</span>'+
+              (r.disambiguation?' <span class="lvl-warn">('+esc(r.disambiguation)+')</span>':'')+(r.track_match?'':' <span class="note">— different track count</span>'):
+            '<b>'+esc(r.title)+'</b> — '+esc(r.artist)+' <span class="note">'+esc([r.year,r.type,r.editions+' edition'+(r.editions===1?'':'s')].filter(Boolean).join(' · '))+'</span>')+'</div>').join('');
+        box.querySelectorAll('[data-i]').forEach(el=>el.addEventListener('click',()=>{
+            box.querySelectorAll('div').forEach(x=>x.classList.remove('on')); el.classList.add('on'); tgFetch(src,d.results[+el.dataset.i].id);
+        }));
+    }catch(e){ st.textContent='✗ '+e.message; }
+}
+async function tgFetch(src,id){
+    const note=document.getElementById('tg-release-note'); note.innerHTML='<span class="spinner"></span> loading…';
+    try{
+        const d=await api('/api/tags/release',{method:'POST',body:JSON.stringify({source:src,id,name:tg.album.name,path:tg.album.path,disc_info:tg.album.disc_info})});
+        tg.cleanupOnly=false;
+        if(src==='musicbrainz'){
+            tg.props={}; d.proposals.forEach(p=>{ tg.props[p.path]=p.tags; });
+            tg.source='MusicBrainz: '+d.summary.title+(d.summary.disambiguation?' ('+d.summary.disambiguation+')':'');
+            note.innerHTML='Tracks paired '+esc(d.how)+'. '+(d.note?'<span class="warn">'+esc(d.note)+'</span> ':'')+'<a href="'+esc(d.summary.url)+'" target="_blank" rel="noopener">open on MusicBrainz</a>';
+            tgOfferEdition(d.edition);
+            tg.fieldsOn={}; tgRender();
+        }else{
+            const box=document.getElementById('tg-editions');
+            box.innerHTML='<div class="note" style="cursor:default">Editions — the one whose files match yours is picked:</div>'+d.editions.map((e,i)=>'<div data-e="'+i+'">'+esc(e.label)+' <span class="note">'+esc(e.formats.join(', '))+
+                (e.match?' · files match '+Math.round(e.match*100)+'%':'')+'</span></div>').join('');
+            const pick=i=>{
+                box.querySelectorAll('[data-e]').forEach(x=>x.classList.toggle('on',+x.dataset.e===i));
+                const e=d.editions[i]; tg.props={}; tg.data.tracks.forEach(t=>{ tg.props[t.path]=e.tags; });
+                tg.source='Redacted: '+d.title+' — '+e.label; tgOfferEdition(e.edition);
+                tg.fieldsOn={}; tgRender();
+            };
+            box.querySelectorAll('[data-e]').forEach(el=>el.addEventListener('click',()=>pick(+el.dataset.e)));
+            note.innerHTML='Redacted has album details (label, catalogue number, year, edition), not track titles. <a href="'+esc(d.url)+'" target="_blank" rel="noopener">open on Redacted</a>';
+            if(d.editions.length) pick(0);
+        }
+    }catch(e){ note.textContent='✗ '+e.message; }
+}
+// A note from the folder name (or typed) wins; the release's own edition is offered next to it.
+function tgOfferEdition(ed){
+    const sib=document.getElementById('tg-siblings');
+    sib.querySelectorAll('.tg-offer').forEach(x=>x.remove());
+    if(!ed) return;
+    if(!val('tg-edition') && !tg.editionTouched){ setVal('tg-edition',ed); return; }
+    if(ed===val('tg-edition')) return;
+    const o=document.createElement('div'); o.className='tg-offer';
+    o.innerHTML='The chosen release calls its edition <b>'+esc(ed)+'</b>. <a href="#">Use that instead</a>';
+    o.querySelector('a').addEventListener('click',ev=>{ ev.preventDefault(); setVal('tg-edition',ed); tg.editionTouched=true; o.remove(); tgRender(); });
+    sib.appendChild(o);
+}
+function tgManualSet(){
+    const k=val('tg-set-key').toUpperCase(), v=val('tg-set-val');
+    if(!k||!/^[\x20-\x3C\x3E-\x7D]+$/.test(k)){ alert('Field names use plain letters, digits, spaces or _'); return; }
+    tg.set[k]=v; tg.remove=tg.remove.filter(x=>x!==k); setVal('tg-set-key',''); setVal('tg-set-val',''); tgRender();
+}
+function tgManualRemove(){
+    const k=val('tg-del-key').toUpperCase(); if(!k) return;
+    if(!tg.remove.includes(k)) tg.remove.push(k); delete tg.set[k]; setVal('tg-del-key',''); tgRender();
+}
+function tgReset(){ tg.props=null; tg.set={}; tg.remove=[]; tg.cleanupOnly=false; tg.fieldsOn={}; tg.source=null;
+    document.querySelectorAll('#tg-results div,#tg-editions div').forEach(x=>x.classList.remove('on')); setVal('tg-edition',tg.data.edition_hint||''); tg.editionTouched=false; tgRender(); }
+document.addEventListener('input',e=>{ if(e.target&&e.target.id==='tg-edition'&&tg) tg.editionTouched=true; });
+
+// The complete new tags for every track, from: current tags (tidied) + chosen lookup fields + edition + manual changes
+function tgCompute(){
+    const onlyEmpty=document.getElementById('tg-only-empty').checked;
+    const ed=val('tg-edition');
+    return tg.data.tracks.map(t=>{
+        const cur=t.tags||{}, out=JSON.parse(JSON.stringify(cur)), from={};
+        const use=tg.tracksOn[t.path]!==false;
+        if(use && tg.props && tg.props[t.path]){
+            Object.entries(tg.props[t.path]).forEach(([f,v])=>{
+                if(!v||!v.length) return;
+                if(tg.fieldsOn[f]===false) return;
+                if(onlyEmpty && cur[f] && cur[f].length) return;
+                out[f]=v; from[f]=true;
+            });
+        }
+        if(use && ed){
+            if(document.getElementById('tg-ed-mb').checked){ out.MUSICBRAINZ_ALBUMCOMMENT=[ed]; }
+            if(document.getElementById('tg-ed-comment').checked){ out.COMMENT=[ed]; }
+            if(document.getElementById('tg-ed-album').checked){
+                const a=(out.ALBUM||[''])[0]; if(a && !a.includes(ed)) out.ALBUM=[a+' ('+ed+')'];
+            }
+        }
+        if(use){ Object.entries(tg.set).forEach(([k,v])=>{ out[k]=v?[v]:[]; if(!v) delete out[k]; }); tg.remove.forEach(k=>delete out[k]); }
+        return {t, cur, out, from, use, tidy:(t.notes||[]).length>0};
+    });
+}
+function tgRender(){
+    if(!tg||!tg.data) return;
+    const rows=tgCompute();
+    const changed=rows.filter(r=>r.use&&(r.tidy||JSON.stringify(r.cur)!==JSON.stringify(r.out)));
+    const fields=new Set(); rows.forEach(r=>{ new Set([...Object.keys(r.cur),...Object.keys(r.out)]).forEach(f=>{ if(JSON.stringify(r.cur[f]||[])!==JSON.stringify(r.out[f]||[])) fields.add(f); }); });
+    // fields from the lookup can be switched off; once off they drop out of `fields`, so also list them
+    if(tg.props) Object.values(tg.props).forEach(p=>Object.keys(p).forEach(f=>{ if(tg.fieldsOn[f]===false) fields.add(f); }));
+    const albumF=[...fields].filter(f=>!TG_TRACK_FIELDS.includes(f)&&!TG_DETAIL(f));
+    const detailF=[...fields].filter(f=>TG_DETAIL(f));
+    const trackF=[...fields].filter(f=>TG_TRACK_FIELDS.includes(f)&&!TG_DETAIL(f));
+    const box=document.getElementById('tg-diff');
+    setEl('tg-change-count',changed.length?'— '+changed.length+' of '+rows.length+' track'+(rows.length===1?'':'s')+' change'+(tg.source?' · from '+tg.source:''):'');
+    if(!changed.length && !fields.size){ box.innerHTML='<p class="note">No changes yet. Look up the album, set an edition note, use Advanced — or click Clean up tags.</p>'; return; }
+    const cb=f=>'<input type="checkbox" '+(tg.fieldsOn[f]===false?'':'checked')+' onchange="tg.fieldsOn[\''+f+'\']=this.checked;tgRender()"'+(tg.props&&Object.values(tg.props).some(p=>p[f])?'':' disabled')+'>';
+    const distinct=(rs,f,key)=>[...new Set(rs.filter(r=>r.use).map(r=>tgVal(r[key][f])))];
+    const fieldRow=f=>{
+        const b=distinct(rows,f,'cur'), a=distinct(rows,f,'out');
+        const show=v=>v.map(x=>x===''?'<i class="note">empty</i>':esc(x)).join(' <span class="note">|</span> ');
+        return '<tr><td>'+cb(f)+'</td><td>'+esc(tgName(f))+'</td><td class="tg-old">'+show(b)+'</td><td class="tg-new">'+show(a)+'</td></tr>';
+    };
+    let html='';
+    if(albumF.length) html+='<b>Album</b><table class="tg-table"><tr><th></th><th>Field</th><th>Now</th><th>After</th></tr>'+albumF.map(fieldRow).join('')+'</table>';
+    if(detailF.length) html+='<details style="margin-top:6px"><summary class="note">MusicBrainz IDs, sort names and other details ('+detailF.length+' fields)</summary><table class="tg-table"><tr><th></th><th>Field</th><th>Now</th><th>After</th></tr>'+detailF.map(fieldRow).join('')+'</table></details>';
+    if(trackF.length||rows.some(r=>r.tidy)){
+        html+='<b style="display:block;margin-top:8px">Tracks</b><table class="tg-table"><tr><th></th><th>File</th>'+trackF.map(f=>'<th>'+cb(f)+' '+esc(tgName(f))+'</th>').join('')+'<th>Tidy</th></tr>'+
+            rows.map(r=>'<tr><td><input type="checkbox" '+(r.use?'checked':'')+' onchange="tg.tracksOn[\''+r.t.path.replace(/\\/g,'\\\\').replace(/'/g,"\\'")+'\']=this.checked;tgRender()"></td><td class="chk-file">'+esc(r.t.name)+'</td>'+
+            trackF.map(f=>{ const b=tgVal(r.cur[f]), a=tgVal(r.out[f]); return '<td>'+(b===a?'<span class="tg-same">'+esc(a)+'</span>':(b?'<span class="tg-old">'+esc(b)+'</span><br>':'')+'<span class="tg-new">'+(a?esc(a):'<i>removed</i>')+'</span>')+'</td>'; }).join('')+
+            '<td class="note" title="'+esc((r.t.notes||[]).join('\n')).replace(/"/g,'&quot;')+'">'+(r.tidy?'✓ '+r.t.notes.length:'')+'</td></tr>').join('')+'</table>';
+    }
+    box.innerHTML=html;
+}
+async function tgSave(){
+    const rows=tgCompute().filter(r=>r.use&&(r.tidy||JSON.stringify(r.cur)!==JSON.stringify(r.out)));
+    if(!rows.length){ setEl('tg-save-status','Nothing to save.'); return; }
+    if(!confirm('Write new tags to '+rows.length+' file'+(rows.length===1?'':'s')+'? (A backup is kept — you can undo.)')) return;
+    const st=document.getElementById('tg-save-status'); st.innerHTML='<span class="spinner"></span> saving…';
+    try{
+        const r=await api('/api/tags/apply',{method:'POST',body:JSON.stringify({label:tg.source?('Tags from '+tg.source):(tg.cleanupOnly?'Clean up tags':'Tag edit'),
+            changes:rows.map(r=>({path:r.t.path,tags:r.out}))})});
+        st.textContent=r.errors.length?'⚠ '+r.errors.length+' file(s) failed: '+r.errors.map(e=>e.error).join('; '):'✓ Saved '+r.written+' file'+(r.written===1?'':'s');
+        st.className=r.errors.length?'warn':'ok';
+        tg.props=null; tg.set={}; tg.remove=[]; tg.cleanupOnly=false; tg.source=null; tg.fieldsOn={};
+        await tgLoad();
+    }catch(e){ st.textContent='✗ '+e.message; st.className='err'; }
+}
+function tgRawFill(){
+    const sel=document.getElementById('tg-raw-track');
+    sel.innerHTML=tg.data.tracks.map((t,i)=>'<option value="'+i+'">'+esc(t.name)+'</option>').join('');
+    tgRawLoad();
+}
+function tgRawLoad(){
+    const t=tg.data.tracks[+document.getElementById('tg-raw-track').value||0];
+    document.getElementById('tg-raw').value=t?(t.raw||[]).map(([k,v])=>k+'='+v).join('\n'):'';
+}
+async function tgRawSave(){
+    const t=tg.data.tracks[+document.getElementById('tg-raw-track').value||0]; if(!t) return;
+    const pairs=document.getElementById('tg-raw').value.split('\n').filter(l=>l.trim()).map(l=>{ const i=l.indexOf('='); return i>0?[l.slice(0,i),l.slice(i+1)]:null; });
+    if(pairs.some(p=>!p)){ alert('Every line needs FIELD=value'); return; }
+    try{
+        const r=await api('/api/tags/apply-raw',{method:'POST',body:JSON.stringify({path:t.path,pairs})});
+        toast('Saved '+t.name,3000); await tgLoad();
+    }catch(e){ alert(e.message); }
 }
 
 // ── Missing report ────────────────────────────────────────────────────────

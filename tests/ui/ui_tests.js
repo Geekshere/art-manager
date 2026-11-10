@@ -285,6 +285,43 @@ const gridLabels = (page, id) => page.$$eval(`#${id} .img-cell img`, els => els.
     await page.close();
   }
 
+  // ── 9b. Tag editor: lookup (mocked), before/after, save, undo ────────────
+  {
+    const page = await newPage();
+    await mockSearch(page, {});
+    page.on('dialog', d => d.accept());
+    await page.goto(BASE + '/Alpha/First/');
+    await page.waitForSelector('#step-album:not(.hidden)');
+    await page.click('#step-album button:has-text("Tags…")');
+    await page.waitForSelector('#tg-current tr:nth-child(2)');
+    const read = await page.evaluate(() => tg.data.tracks.map(t => t.path));
+    await page.route('**/api/tags/lookup', r => r.fulfill({ contentType: 'application/json', body: JSON.stringify({ results: [
+      { id: 'mb1', title: 'First', artist: 'Alpha', date: '2001', country: 'GB', format: 'CD', label: 'L', catno: 'C1', tracks: 2, disambiguation: 'deluxe', track_match: true }] }) }));
+    await page.route('**/api/tags/release', r => r.fulfill({ contentType: 'application/json', body: JSON.stringify({
+      source: 'musicbrainz', summary: { title: 'First', url: 'https://musicbrainz.org/release/mb1', disambiguation: 'deluxe' },
+      edition: 'deluxe', how: 'in file-name order', note: '',
+      proposals: read.map((p, i) => ({ path: p, name: p, matched: true,
+        tags: { ALBUM: ['First'], ALBUMARTIST: ['Alpha'], DATE: ['2001'], TITLE: ['Song ' + (i + 1)], TRACKNUMBER: [String(i + 1)],
+                MUSICBRAINZ_ALBUMID: ['mb1'] } })) }) }));
+    await page.click('#v-tags button:has-text("Search")');
+    await page.click('#tg-results [data-i="0"]');
+    await page.waitForFunction(() => tg && tg.source && /2 of 2 tracks change/.test(document.getElementById('tg-change-count').textContent));
+    check(await page.inputValue('#tg-edition') === 'deluxe', `release edition used when the folder gives none (got ${JSON.stringify(await page.inputValue('#tg-edition'))}, siblings: ${await page.textContent('#tg-siblings')})`);
+    const diff = await page.textContent('#tg-diff');
+    check(diff.includes('Song 1') && diff.includes('Album artist'), `before/after shows titles and album fields: ${diff.slice(0, 300)}`);
+    // switch one field off: it must not be written
+    await page.click('#tg-diff tr:has-text("Date") input[type=checkbox]');
+    await page.click('#tg-save');
+    await page.waitForFunction(() => /Saved 2 files/.test(document.getElementById('tg-save-status').textContent));
+    const now = await page.evaluate(() => tg.data.tracks.map(t => [t.tags.TITLE[0], t.tags.DATE, t.tags.MUSICBRAINZ_ALBUMCOMMENT[0]]));
+    check(JSON.stringify(now) === JSON.stringify([['Song 1', undefined, 'deluxe'], ['Song 2', undefined, 'deluxe']]),
+          `saved: titles + edition, not the unticked date ${JSON.stringify(now)}`);
+    await page.click('#tg-backups button');
+    await page.waitForFunction(() => tg.data.tracks[0].tags.TITLE === undefined || tg.data.tracks[0].tags.TITLE[0] !== 'Song 1');
+    check(true, 'undo restores the previous tags');
+    await page.close();
+  }
+
   // ── 10. Quit from the browser (last: stops the server) ───────────────────
   {
     const page = await newPage();
