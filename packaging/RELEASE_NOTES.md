@@ -1,5 +1,9 @@
 ## Download and run — no Python needed
 
+Already using 0.6.0 or newer? You don't need to download anything — the app
+updates itself (Settings → Updates).
+
+
 | System | File |
 |---|---|
 | Windows 10/11 (64-bit) | `art-manager-windows-x64.exe` |

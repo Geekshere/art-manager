@@ -40,7 +40,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Dependencies
-        run: pip install -r requirements.txt pyinstaller
+        run: pip install -r requirements.txt "pyinstaller>=6.10"   # 6.9+: PYINSTALLER_RESET_ENVIRONMENT
       - name: Build
         run: pyinstaller --noconfirm packaging/art-manager.spec
       - name: Rename

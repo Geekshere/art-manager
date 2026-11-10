@@ -34,6 +34,11 @@ It only ever touches artwork — never tags, genres or filenames.
   `#recycle`, …), your own ignore list, and any top-level folder with no albums
 - Folders that can't be read (a flaky share) are reported and retried next time
   instead of silently disappearing
+- **Updates itself** (downloaded app): checks for new versions, downloads and
+  verifies them in the background, and installs at the next start — or right
+  away with **Update now**. Settings are kept
+- **Redacted** as an art source with your own API key (covers and artist
+  images), respecting Redacted's rate limits
 - Keyboard: **←** / **→** previous / next, **Esc** back to the artist list
 - **⏻ Quit** in the top bar stops the app
 
@@ -50,7 +55,8 @@ It only ever touches artwork — never tags, genres or filenames.
 Double-click it. A small window shows the address and your browser opens Art
 Manager; close the window to stop it. The apps aren't code-signed, so the first
 start needs one extra click: Windows → *More info* → *Run anyway*; macOS →
-right-click → *Open*; Linux → `chmod +x` first. All releases:
+right-click → *Open*; Linux → `chmod +x` first. From then on the app keeps
+itself up to date (**Settings → Updates**). All releases:
 [Releases page](https://github.com/Geekshere/art-manager/releases).
 
 ### With one command (any system with internet access)
@@ -195,6 +201,7 @@ Secrets can come from environment variables instead; they override
 | `ARTMGR_STORAGE_USERNAME` / `ARTMGR_STORAGE_PASSWORD` | SMB / WebDAV credentials |
 | `ARTMGR_FANART_KEY` | Fanart.tv API key |
 | `ARTMGR_DISCOGS_TOKEN` | Discogs personal token |
+| `ARTMGR_REDACTED_KEY` | Redacted API key |
 | `ARTMGR_PASSWORD` | same as `--password` |
 | `ARTMGR_HOST` / `ARTMGR_PORT` | same as `--host` / `--port` |
 | `ARTMGR_DEBUG=1` | log what each search source returned (troubleshooting) |
@@ -208,6 +215,7 @@ Secrets can come from environment variables instead; they override
 | Cover Art Archive (via MusicBrainz) | album covers | none |
 | Wikipedia | artist photos | none |
 | Fanart.tv | artist photos | free API key |
+| Redacted | album covers, artist images | your API key with the **Torrent** scope (profile → Access Settings → API Keys) |
 | Discogs | album covers | free personal token (Discogs only returns images to signed-in API users) |
 | Web (DuckDuckGo + Bing images) | anything else | none — see below |
 

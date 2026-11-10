@@ -96,12 +96,12 @@ def test_apply_replaces_program_and_restarts(release, tmp_path, monkeypatch):
     prog.write_bytes(b'old program')
     monkeypatch.setattr(updater, '_program', lambda: str(prog))
     calls = []
-    monkeypatch.setattr(updater.os, 'execv', lambda p, a: calls.append((p, a)))
+    monkeypatch.setattr(updater.os, 'execve', lambda p, a, env: calls.append((p, a, env.get('PYINSTALLER_RESET_ENVIRONMENT'))))
     closed = []
     monkeypatch.setattr(updater.os, 'closerange', lambda lo, hi: closed.append((lo, hi)))
     updater.apply(staged, ['--updated-from', __version__])
     assert prog.read_bytes() == PROGRAM and os.access(prog, os.X_OK)
-    assert calls == [(str(prog), [str(prog), '--updated-from', __version__])]
+    assert calls == [(str(prog), [str(prog), '--updated-from', __version__], '1')]   # fresh unpack, not the old one
     assert closed == [(3, 65536)]   # inherited sockets closed before exec (else the port stays busy)
 
 def test_cleanup_removes_old_versions(release, tmp_path, monkeypatch):

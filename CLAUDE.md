@@ -52,6 +52,8 @@ art_manager/
   artwork.py               find/write cover & artist images, embed into FLACs
   search.py                image sources + Provider registry + run_providers()
   check.py                 fast FLAC/cover health check (no decoding), cached, library jobs
+  updater.py               self-update of the standalone app from GitHub Releases
+  redacted.py              Redacted API source (rate limiter, image-host proxy)
   server.py                Flask routes, path confinement, auth, embed jobs (SSE), CLI main()
   templates/index.html     the whole frontend: one SPA, vanilla JS, no build step
 packaging/                 PyInstaller spec + release notes for the standalone apps
@@ -189,6 +191,30 @@ the browser and exit (second double-click) → otherwise start, and open the
 browser only after the port accepts connections (`open_browser`: `os.startfile`
 / `open` / `xdg-open`). Errors keep the standalone app's window open.
 `/api/quit` (JSON POST only) stops the process. `/api/ping` needs no password.
+
+### Self-update (`updater.py`)
+
+Standalone app only (`sys.frozen`). `check()` reads
+`api.github.com/repos/Geekshere/art-manager/releases/latest` (override with
+`ARTMGR_UPDATE_URL` for tests); `download()` picks this platform's asset,
+verifies size + the `digest` (sha256) GitHub publishes, runs the new file's
+`--version`, and stages it in `<data dir>/update/`. `apply()`: Linux/macOS
+replace the file and `execv` (after `os.closerange(3, …)` — Werkzeug's listening
+socket is inheritable and would keep the port busy); Windows renames the
+running .exe aside, copies the new one in, starts it (`CREATE_NEW_CONSOLE`)
+and exits. The restart passes `--after-update` (wait for the port, no new
+browser tab) and `--updated-from X` (UI toast). A staged update is installed
+at the next normal start. `packaging/test_update.py` rehearses a real update
+on all three OS in release.yml — run it when touching any of this.
+
+### Redacted (`redacted.py`)
+
+API key in `Authorization`; key needs only the Torrent scope. Global limiter:
+≤ 9 requests per 10 s (Redacted allows 10), Retry-After from a 429 blocks all
+calls. Album covers: `browse` (artistname + groupname) → `cover`, else up to 3
+`torrentgroup` lookups for `wikiImage`. Images on Redacted's own host (`i/…`)
+are served via `/api/image/redacted?path=…` because they need `imgauth`
+credentials (password-equivalent) — never put those in a URL the browser sees.
 
 ### Server safety
 

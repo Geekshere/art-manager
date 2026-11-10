@@ -245,6 +245,10 @@ def apply(staged, restart_args):
     with _lock:
         state.update(status='installing')
     log.info('installing update from %s over %s', staged, prog)
+    # The standalone app unpacks itself to a temp folder and marks it in the
+    # environment; a new copy inheriting that would reuse the OLD version's
+    # folder (being deleted as we exit). PyInstaller's switch for "start fresh":
+    env = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT='1')
     if sys.platform == 'win32':
         old = prog + f'.old-{int(time.time())}'
         os.replace(prog, old)                     # a running .exe can be renamed, not overwritten
@@ -256,7 +260,7 @@ def apply(staged, restart_args):
             raise
         log.info('new program in place, starting: %s %s', prog, restart_args)
         flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0)
-        p = subprocess.Popen([prog] + restart_args, creationflags=flags, close_fds=True)
+        p = subprocess.Popen([prog] + restart_args, creationflags=flags, close_fds=True, env=env)
         log.info('started the new version (pid %s); this one exits', p.pid)
         for h in logging.getLogger('art_manager').handlers:
             try: h.flush()
@@ -271,7 +275,7 @@ def apply(staged, restart_args):
         # for its reloader); carried through exec it would keep the port busy
         # with nobody answering. Close everything but stdin/out/err first.
         os.closerange(3, 65536)
-        os.execv(prog, [prog] + restart_args)
+        os.execve(prog, [prog] + restart_args, env)
 
 
 def cleanup():

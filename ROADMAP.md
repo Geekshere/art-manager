@@ -237,6 +237,7 @@ the URL.
 - File check (damaged/truncated FLACs, tags, embedded art, cover quality).
 - Quick fixes for missing cover.jpg, keyboard shortcuts, Quit button.
 - Speed work (see CLAUDE.md → Speed).
+- Self-update for the standalone app; Redacted as an image source.
 
 ## Ideas (not scheduled)
 
