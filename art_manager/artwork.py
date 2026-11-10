@@ -183,6 +183,19 @@ def _image_info(path):
         return None
     return data, mime, w * h
 
+def _same_picture(a, b, tolerance=14):
+    """Whether two images show the same picture (any size/format): 16×16 grey thumbnails compared."""
+    from PIL import Image
+    try:
+        ia, ib = (Image.open(io.BytesIO(x)) for x in (a, b))
+        ra, rb = ia.size[0] / ia.size[1], ib.size[0] / ib.size[1]
+        if abs(ra - rb) > 0.05:
+            return False
+        ta, tb = (i.convert('L').resize((16, 16)).tobytes() for i in (ia, ib))
+    except Exception:
+        return False
+    return sum(abs(x - y) for x, y in zip(ta, tb)) / 256 <= tolerance
+
 def tidy_folder(folder, required, find, files=None, remove=True):
     """
     Make `required` (cover.jpg, artist.jpg, folder.jpg, ...) the one proper
@@ -190,7 +203,8 @@ def tidy_folder(folder, required, find, files=None, remove=True):
       - cover.png / Cover.JPEG / cover.webp / ... and no cover.jpg -> converted
         into cover.jpg (JPEGs are copied unchanged, others converted at q95)
       - several of them and no cover.jpg -> the one with the most pixels
-      - cover.jpg and cover.png both there -> cover.jpg is kept
+      - cover.jpg and cover.png both there -> the bigger one if they show the
+        same picture, else the existing cover.jpg
       - cover.jpg that is really a PNG (or anything but a JPEG) -> re-encoded
       - with remove=True the other spellings are deleted
         afterwards, so players can't pick the old one. Unreadable images are
@@ -217,9 +231,13 @@ def tidy_folder(folder, required, find, files=None, remove=True):
             out['kept'].append(p)          # not readable: leave it for the user to look at
     if not cand:
         return out
-    # an existing, readable cover.jpg is kept (it's the one players use and the
-    # one picked in this app); otherwise the biggest of the other spellings
-    best = next((c for c in cand if c[0] == have), None) or max(cand, key=lambda c: c[3])
+    # The biggest copy wins — but a copy that shows *different* art never
+    # replaces an existing cover.jpg (that one is what players show and what
+    # was picked in this app); then cover.jpg is kept.
+    current = next((c for c in cand if c[0] == have), None)
+    best = max(cand, key=lambda c: (c[3], c[0] == have))
+    if current and best is not current and not _same_picture(current[1], best[1]):
+        best = current
     path, data, mime, _ = best
     if path != have or mime != want:
         jpeg = to_jpeg(data, mime or 'image/jpeg')

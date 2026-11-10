@@ -25,9 +25,11 @@ async function mockSearch(page, delays) {
       body = { results: [1, 2, 3].map(i => result(tag, i, 'Deezer')), page: 0,
                sources: [{ key: 'deezer', label: 'Deezer', status: 'ok', count: 3 }] };
     } else {
-      const phase = u.pathname.endsWith('/fast') ? 'fast' : 'slow';
+      const phase = u.pathname.endsWith('/fast') ? 'fast' : u.pathname.endsWith('/first') ? 'first' : 'slow';
       tag = u.searchParams.get('album'); key = `${phase}:${tag}`;
-      body = phase === 'fast'
+      body = phase === 'first'
+        ? { results: [1].map(i => result(tag, i, 'Redacted')), sources: [{ key: 'redacted', label: 'Redacted', status: 'ok', count: 1 }] }
+        : phase === 'fast'
         ? { results: [1, 2].map(i => result(tag, i)), sources: [{ key: 'itunes', label: 'iTunes', status: 'ok', count: 2 }] }
         : { results: [1].map(i => result(tag, i, 'CAA')), sources: [{ key: 'caa', label: 'CAA', status: 'ok', count: 1 },
                                                                   { key: 'web', label: 'Web', status: 'unavailable', count: 0, message: 'rate limited' }] };
@@ -112,6 +114,23 @@ const gridLabels = (page, id) => page.$$eval(`#${id} .img-cell img`, els => els.
           `source chips show per-source status: ${JSON.stringify(chips)}`);
     const status = await page.textContent('#alb-search-status');
     check(status === '3 results', `status line belongs to Second: ${JSON.stringify(status)}`);
+    await page.close();
+  }
+
+  // ── 3b. Redacted answers last but is shown first ─────────────────────────
+  {
+    const page = await newPage();
+    await page.route('**/api/config', async route => {
+      const r = await route.fetch(); const j = await r.json();
+      route.fulfill({ response: r, json: { ...j, has_redacted_key: true } });
+    });
+    await mockSearch(page, { 'fast:First': 50, 'slow:First': 100, 'first:First': 900 });
+    await page.goto(BASE + '/Alpha/First/');
+    await page.waitForFunction(() => document.querySelectorAll('#alb-grid .img-cell').length === 4, null, { timeout: 5000 });
+    const order = await page.evaluate(() => allAlbumResults.map(r => r.source));
+    check(order.length === 4 && order[0] === 'Redacted', `Redacted result first: ${JSON.stringify(order)}`);
+    const chips = await page.textContent('#alb-sources');
+    check(/^Sources: Redacted/.test(chips.trim()), `Redacted chip first: ${JSON.stringify(chips)}`);
     await page.close();
   }
 

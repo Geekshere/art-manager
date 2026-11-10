@@ -235,13 +235,21 @@ Everything that decides or writes covers reads these — never hard-code
 
 `scan.variants()` = same stem as the configured name, other image type or
 case (`cover.png`, `Cover.JPEG`, `cover.webp`). Albums carry `cover_variants`,
-artists `img_variants`. `artwork.tidy_folder()`: existing readable required
-file wins, else the variant with most pixels; re-encodes a required file whose
+artists `img_variants`. `artwork.tidy_folder()`: the copy with most pixels wins, except
+that a copy showing different art (`_same_picture`: 16×16 grey thumbnails)
+never replaces an existing readable required file; re-encodes a required file whose
 content is the wrong type (sniffed by magic bytes); deletes the variants
 (`storage.remove`, all backends) only with `remove=True` and only after the
 write, never unreadable ones. `fix_album_covers()` tidies first. UI: Quick
 fixes → Tidy (`/api/fix-covers` with `mode: 'tidy'`), check report → Convert
-covers (`cover_not_jpeg`).
+covers (`cover_not_jpeg`). With `cfg['auto_tidy']` (default on) `/api/scan`
+starts a background tidy job for every folder with variants and returns
+`tidy_job` (page polls, rescans when something changed; folders where nothing
+changed are remembered in `_tidy_seen` so a rescan can't loop), and the check
+job re-saves `cover_not_jpeg` covers in place (`report.converted_covers`).
+
+Album search phases: `first` (Redacted, own request, always prepended),
+`fast`, `slow` (CAA official, web appended) — all requested in parallel.
 
 ### Tags
 

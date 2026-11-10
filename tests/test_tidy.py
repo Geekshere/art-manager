@@ -30,12 +30,11 @@ def test_jpeg_extension_is_copied_unchanged(tmp_path):
     artwork.tidy_album(album(tmp_path))
     assert names(tmp_path) == ['cover.jpg'] and (tmp_path / 'cover.jpg').read_bytes() == data
 
-def test_existing_cover_jpg_is_kept_and_duplicate_removed(tmp_path):
-    mine = img('JPEG', (500, 500), 'blue')
-    (tmp_path / 'cover.jpg').write_bytes(mine)
-    (tmp_path / 'cover.png').write_bytes(img('PNG', (1400, 1400)))
+def test_bigger_copy_of_the_same_picture_wins(tmp_path):
+    (tmp_path / 'cover.jpg').write_bytes(img('JPEG', (500, 500), 'blue'))
+    (tmp_path / 'cover.png').write_bytes(img('PNG', (1400, 1400), 'blue'))
     artwork.tidy_album(album(tmp_path))
-    assert names(tmp_path) == ['cover.jpg'] and (tmp_path / 'cover.jpg').read_bytes() == mine
+    assert names(tmp_path) == ['cover.jpg'] and Image.open(tmp_path / 'cover.jpg').size == (1400, 1400)
 
 def test_biggest_variant_wins_when_there_is_no_cover_jpg(tmp_path):
     (tmp_path / 'cover.png').write_bytes(img('PNG', (300, 300)))
@@ -88,19 +87,41 @@ def test_scan_reports_variants(make_library):
     assert al['cover_variants'] == 1 and not al['has_cover'] and al['cover_path'].endswith('cover.PNG')
     assert a['img_variants'] == 1
 
-def test_tidy_job_and_png_named_jpg_served_as_png(client, make_library):
+def _wait(client, job):
+    for _ in range(200):
+        p = client.get(f'/api/fix-covers/{job["id"]}').json
+        if p['status'] != 'running':
+            return p
+        time.sleep(0.05)
+
+def test_scan_tidies_automatically(client, make_library):
     root = make_library()
+    d = root / 'Alpha' / 'Second'
+    (d / 'cover.jpg').write_bytes(img('JPEG', (300, 300)))
+    (d / 'cover.png').write_bytes(img('PNG', (1200, 1200)))          # same picture, bigger
+    lib = client.get('/api/scan', query_string={'root': str(root)}).json
+    p = _wait(client, lib['tidy_job'])
+    assert p['counts'] == {'fixed': 1} and not (d / 'cover.png').exists()
+    assert Image.open(d / 'cover.jpg').size == (1200, 1200)
+    assert 'tidy_job' not in client.get('/api/scan', query_string={'root': str(root)}).json
+
+def test_different_art_never_replaces_cover_jpg(tmp_path):
+    mine = img('JPEG', (500, 500), 'blue')
+    (tmp_path / 'cover.jpg').write_bytes(mine)
+    (tmp_path / 'cover.png').write_bytes(img('PNG', (1400, 1400), 'yellow'))
+    artwork.tidy_album(album(tmp_path))
+    assert names(tmp_path) == ['cover.jpg'] and (tmp_path / 'cover.jpg').read_bytes() == mine
+
+def test_auto_tidy_off_and_manual_job(client, make_library):
+    root = make_library()
+    client.post('/api/config', json={'auto_tidy': False})
     d = root / 'Alpha' / 'Second'
     (d / 'cover.jpg').write_bytes(img('JPEG'))
     (d / 'cover.png').write_bytes(img('PNG'))
-    client.get('/api/scan', query_string={'root': str(root)})
+    lib = client.get('/api/scan', query_string={'root': str(root)}).json
+    assert 'tidy_job' not in lib and (d / 'cover.png').exists()
     job = client.post('/api/fix-covers', json={'mode': 'tidy', 'albums': [album(d)]}).json
-    for _ in range(100):
-        p = client.get(f'/api/fix-covers/{job["id"]}').json
-        if p['status'] != 'running':
-            break
-        time.sleep(0.05)
-    assert p['counts'] == {'fixed': 1} and not (d / 'cover.png').exists()
+    assert _wait(client, job)['counts'] == {'fixed': 1} and not (d / 'cover.png').exists()
     (d / 'cover.jpg').write_bytes(img('PNG'))
     r = client.get('/api/image/local', query_string={'path': str(d / 'cover.jpg')})
     assert r.mimetype == 'image/png'

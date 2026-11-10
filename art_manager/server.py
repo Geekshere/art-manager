@@ -245,7 +245,7 @@ def api_config():
         _verified.clear()
         if 'allow_network' in d:
             cfg['allow_network'] = bool(d['allow_network'])
-        for k in ('update_check', 'update_auto_install'):
+        for k in ('update_check', 'update_auto_install', 'auto_tidy'):
             if k in d:
                 cfg[k] = bool(d[k])
         if 'port' in d:
@@ -378,7 +378,42 @@ def api_scan():
     _cached_lib = {'root': root, 'artists': artists, 'scanned_at': time.time(), 'errors': errors,
                    'skipped': sorted(skipped), 'version': SCHEMA_VERSION, 'naming': config.naming_key()}
     _save_lib_cache(_cached_lib)
-    return jsonify(client_view(_cached_lib))
+    out = client_view(_cached_lib)
+    job = _start_auto_tidy(artists)
+    if job:
+        out = dict(out, tidy_job=job.progress())
+    return jsonify(out)
+
+_tidy_seen = set()     # folders already tidied this session without a change (e.g. an unreadable cover.png)
+
+def _start_auto_tidy(artists):
+    """
+    With cfg['auto_tidy']: every folder with a second copy of the cover / artist
+    image (cover.png next to cover.jpg, or only Cover.JPEG, ...) is turned into
+    one real cover file in the background. The page rescans when it is done.
+    """
+    if not cfg.get('auto_tidy', True) or any(j.status == 'running' for j in _fix_jobs.values()):
+        return None
+    items = []
+    for a in artists:
+        if a.get('img_variants') and a['path'] not in _tidy_seen:
+            items.append({'path': a['path'], 'artist': True, 'label': a['name'], 'disc_info': []})
+        for al in a.get('albums', []):
+            if al.get('cover_variants') and al['path'] not in _tidy_seen:
+                items.append({'path': al['path'], 'disc_info': al.get('disc_info', []),
+                              'label': f"{a['name']} — {al['name']}", 'artist': False})
+    if not items:
+        return None
+    job = _FixJob(items, embed=False, use_embedded=False, tidy=True, remove_old=True)
+    job.auto = True
+    _fix_jobs[job.id] = job
+    def run():
+        job.run()
+        for r in job.results:
+            if r.get('status') != 'fixed':
+                _tidy_seen.add(r['path'])
+    threading.Thread(target=run, daemon=True, name='auto-tidy').start()
+    return job
 
 # ── Search ────────────────────────────────────────────────────────────────────
 
@@ -390,6 +425,13 @@ def _page_arg():
 def api_search_album_fast():
     """Fast official sources — shown immediately."""
     results, sources = run_providers('album', 'fast',
+        (request.args.get('artist', ''), request.args.get('album', '')), _page_arg())
+    return jsonify({'results': results, 'sources': sources})
+
+@app.route('/api/search/album/first')
+def api_search_album_first():
+    """Redacted (when a key is set) — fetched in parallel, always shown first."""
+    results, sources = run_providers('album', 'first',
         (request.args.get('artist', ''), request.args.get('album', '')), _page_arg())
     return jsonify({'results': results, 'sources': sources})
 

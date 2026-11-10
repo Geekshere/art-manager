@@ -101,7 +101,7 @@ def test_image_proxy_keeps_credentials_on_server(api, client):
     assert img['url'] == 'https://redacted.sh/i/sFEgBaH3qlo.png'
     assert img['params'] == {'h': 'SECRET-H', 'e': img['params']['e'], 'u': 42}
     # credentials appear in no response the browser can see
-    for path in ('/api/config', '/api/search/album/slow?artist=Portishead&album=Dummy', '/api/search/artist?name=P'):
+    for path in ('/api/config', '/api/search/album/first?artist=Portishead&album=Dummy', '/api/search/artist?name=P'):
         assert 'SECRET-H' not in client.get(path).get_data(as_text=True)
         assert 'KEY123' not in client.get(path).get_data(as_text=True)
     assert client.get('/api/config').json['has_redacted_key'] is True
@@ -120,8 +120,10 @@ def test_choosing_a_redacted_cover_embeds_it(api, client, make_library):
     out = client.get(f"/api/embed/{r.json['embed_id']}").get_data(as_text=True)
     assert '"errors": []' in out
 
-def test_search_api_shows_redacted_first_in_slow_phase(api, client):
-    r = client.get('/api/search/album/slow', query_string={'artist': 'Portishead', 'album': 'Dummy'}).json
+def test_search_api_redacted_has_its_own_first_phase(api, client):
+    slow = client.get('/api/search/album/slow', query_string={'artist': 'Portishead', 'album': 'Dummy'}).json
+    assert 'redacted' not in {s['key'] for s in slow['sources']}
+    r = client.get('/api/search/album/first', query_string={'artist': 'Portishead', 'album': 'Dummy'}).json
     src = {s['key']: s for s in r['sources']}
     assert src['redacted']['status'] == 'ok' and src['redacted']['count'] == 2
     assert r['results'][0]['source'] == 'Redacted'

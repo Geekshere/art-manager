@@ -274,10 +274,10 @@ def test_tidy_converts_and_removes_through_backend(client, backend):
     b = io.BytesIO(); Image.new('RGB', (600, 600), 'red').save(b, 'PNG')
     disk = root / 'Alpha' / 'Second'
     (disk / 'Cover.PNG').write_bytes(b.getvalue())
-    lib = _scan(client, url)
+    lib = _scan(client, url)                         # auto tidy (on by default) starts here
     al = _album(lib, 'Alpha', 'Second')
     assert al['cover_variants'] == 1
-    job = client.post('/api/fix-covers', json={'mode': 'tidy', 'albums': [al]}).json
+    job = lib['tidy_job']
     for _ in range(200):
         d = client.get(f"/api/fix-covers/{job['id']}").json
         if d['status'] != 'running':

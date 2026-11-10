@@ -471,6 +471,7 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
     <h3>Library type &amp; file names</h3>
     <p class="note" style="max-width:640px">What plays your music decides which file names count as a cover. Changing this rescans the library.</p>
     <div id="st-libtype"></div>
+    <div class="cfg-row"><label></label><label style="min-width:0;display:flex;gap:6px;align-items:center;color:#333;max-width:640px"><input type="checkbox" id="cfg-auto-tidy" onchange="saveAutoTidy()"> tidy cover files automatically: when a folder has two copies (<code>cover.jpg</code> + <code>cover.png</code>) keep the better one, convert it to the name above and delete the other; a lone <code>cover.png</code> / <code>Cover.JPEG</code> / PNG named <code>.jpg</code> is converted too</label></div>
     <div class="cfg-row"><label></label><button class="primary" onclick="saveLibType()">Save</button><span id="libtype-status" class="note"></span></div>
     <hr class="sep">
     <h3>Updates</h3>
@@ -829,6 +830,7 @@ function fillCfgForm(c){
     applyNamesToPage();
     if(document.getElementById('v-settings').classList.contains('hidden')||!document.getElementById('st-libtype').innerHTML) renderLibType('st');
     setEl('cfg-file',c.settings_file||'');
+    document.getElementById('cfg-auto-tidy').checked=c.auto_tidy!==false;
     document.getElementById('cfg-root').value=c.library_root||'';
     document.getElementById('cfg-web').checked=c.web_search!==false;
     document.getElementById('cfg-user').value=c.storage_username||'';
@@ -939,6 +941,23 @@ function libTypeBody(prefix){
     if(k==='custom') b.naming={cover_name:val(prefix+'-cover'),artist_image_name:val(prefix+'-artist'),
         disc_covers:document.getElementById(prefix+'-disc').checked,embed_art:document.getElementById(prefix+'-embed').checked};
     return b;
+}
+async function saveAutoTidy(){
+    try{ fillCfgForm(await api('/api/config',{method:'POST',body:JSON.stringify({auto_tidy:document.getElementById('cfg-auto-tidy').checked})})); toast('Saved',1500); }
+    catch(e){ alert(e.message); }
+}
+async function watchAutoTidy(job){
+    hdrMsg('Tidying '+job.total+' cover folder'+(job.total===1?'':'s')+'…');
+    for(let i=0;i<1200;i++){
+        await new Promise(r=>setTimeout(r,700));
+        let d; try{ d=await api('/api/fix-covers/'+job.id); }catch(_){ return; }
+        if(d.status==='running'){ hdrMsg('Tidying cover files… '+d.done+' / '+d.total); continue; }
+        const fixed=(d.counts||{}).fixed||0;
+        const removed=(d.results||[]).reduce((n,r)=>n+((r.removed||[]).length),0);
+        if(fixed){ toast('✓ Tidied '+fixed+' folder'+(fixed===1?'':'s')+(removed?' — removed '+removed+' old cover cop'+(removed===1?'y':'ies'):''),5000); await doScan(false); }
+        else hdrMsg('');
+        return;
+    }
 }
 async function saveLibType(){
     const s2=document.getElementById('libtype-status');
@@ -1192,6 +1211,7 @@ async function doScan(full){
     try{
         const d=await api('/api/scan?root='+enc(root)+(full?'&full=1':''));
         applyLibrary(d);
+        if(d.tidy_job) setTimeout(()=>watchAutoTidy(d.tidy_job),0);
         if(!navigateFromURL()) showArtistList();
         hdrMsg(d.errors&&d.errors.length?'Updated with errors':'✓ Updated', d.errors&&d.errors.length?'warn':'ok');
         setTimeout(()=>hdrMsg(''),2500);
@@ -1570,24 +1590,39 @@ async function searchAlbumArt(pg){
     setEl('alb-search-status','');
 
     try{
-        // Phase 1: fast official sources (iTunes, Deezer, Discogs) — ~1-2s
-        const fast=await api('/api/search/album/fast?artist='+enc(artist)+'&album='+enc(album)+'&page='+albumSrcPg);
-        if(gen!==albumSearchGen) return;
-        allAlbumResults.push(..._mergeIn(allAlbumResults,fast.results));
-        renderAlbumPage();
-        setEl('alb-search-status', allAlbumResults.length+' results'+(albumSrcPg===0?' · loading CAA + web...':''));
-        renderSources('alb-sources',fast.sources,albumSrcPg===0);
-
-        // Phase 2: slow sources — official ones (CAA) prepended, web results appended. First page only.
-        if(albumSrcPg===0){
-            const slow=await api('/api/search/album/slow?artist='+enc(artist)+'&album='+enc(album));
-            if(gen!==albumSearchGen) return;   // slow phase can take many seconds — often stale
-            const front=_mergeIn(allAlbumResults, slow.results.filter(r=>!r.web));
-            const back =_mergeIn([...front,...allAlbumResults], slow.results.filter(r=>r.web));
-            allAlbumResults=[...front,...allAlbumResults,...back];
+        // Redacted (first), the fast official sources (iTunes, Deezer, Discogs) and the slow ones
+        // (CAA, web) are all requested at once; each is shown as it arrives, in that order:
+        // Redacted at the front, then CAA and the fast sources, web results last.
+        const q='?artist='+enc(artist)+'&album='+enc(album);
+        const first=albumSrcPg===0&&clientCfg.has_redacted_key?api('/api/search/album/first'+q).catch(()=>null):Promise.resolve(null);
+        const slowP=albumSrcPg===0?api('/api/search/album/slow'+q).catch(()=>null):Promise.resolve(null);
+        const parts={first:null,slow:null};
+        const rebuild=(fastRes)=>{
+            const red=parts.first?parts.first.results:[];
+            const caa=parts.slow?parts.slow.results.filter(r=>!r.web):[];
+            const web=parts.slow?parts.slow.results.filter(r=>r.web):[];
+            const out=[];
+            [red,caa,albumSrcPg===0?fastRes:allAlbumResults.concat(fastRes),web].forEach(list=>out.push(..._mergeIn(out,list)));
+            allAlbumResults=out;
             renderAlbumPage();
+        };
+        let fastDone=false, fastResults=[];
+        first.then(d=>{ parts.first=d; if(d&&gen===albumSearchGen&&fastDone) rebuild(fastResults); });
+        const fast=await api('/api/search/album/fast'+q+'&page='+albumSrcPg);
+        if(gen!==albumSearchGen) return;
+        fastDone=true; fastResults=fast.results;
+        rebuild(fastResults);
+        const waiting=[clientCfg.has_redacted_key&&!parts.first&&albumSrcPg===0?'Redacted':'',albumSrcPg===0?'CAA + web':''].filter(Boolean);
+        setEl('alb-search-status', allAlbumResults.length+' results'+(waiting.length?' · loading '+waiting.join(', ')+'...':''));
+        renderSources('alb-sources',[...(parts.first?parts.first.sources:[]),...fast.sources],albumSrcPg===0);
+
+        if(albumSrcPg===0){
+            const [r1,r2]=await Promise.all([first,slowP]);
+            if(gen!==albumSearchGen) return;   // slow phase can take many seconds — often stale
+            parts.first=r1; parts.slow=r2;
+            rebuild(fastResults);
             setEl('alb-search-status',allAlbumResults.length+' results');
-            renderSources('alb-sources',[...fast.sources,...slow.sources],false);
+            renderSources('alb-sources',[...(r1?r1.sources:[]),...fast.sources,...(r2?r2.sources:[])],false);
             if(fast.results.length>=6) document.getElementById('alb-load-more').classList.remove('hidden');
         }
         if(allAlbumResults.length===0)
@@ -1790,7 +1825,8 @@ function renderCheckReport(){
     sum.innerHTML=(r.complete?'':'<span class="warn">Cancelled — partial results. </span>')+
         'Checked '+r.files_checked+' files in '+r.albums_checked+' albums ('+r.seconds+' s'+(r.deep?', full decode':'')+') on '+esc(fmtDate(r.finished_at))+': '+
         '<span class="lvl-error"><b>'+(c.error||0)+'</b> errors</span> · <span class="lvl-warn"><b>'+(c.warn||0)+'</b> warnings</span> · '+
-        '<span class="lvl-info">'+(c.info||0)+' info</span>';
+        '<span class="lvl-info">'+(c.info||0)+' info</span>'+
+        (r.converted_covers?' · <span class="ok">re-saved '+r.converted_covers+' cover'+(r.converted_covers===1?'':'s')+' that weren\'t real '+(CN().endsWith('.png')?'PNG':'JPEG')+'s</span>':'');
     const show=new Set([...document.querySelectorAll('.chk-lvl:checked')].map(x=>x.value));
     const albums=(r.albums||[]).map(a=>{
         const albumIssues=a.issues.filter(i=>show.has(i.level));

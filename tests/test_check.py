@@ -130,3 +130,16 @@ def test_check_album_endpoint(client, make_library):
 def test_deep_check(tmp_path, noise_flac):
     p = tagged(tmp_path / 'x.flac', noise_flac)
     assert check.deep_check(str(p)) is None
+
+def test_check_converts_png_named_jpg(client, tmp_path, noise_flac, monkeypatch):
+    from PIL import Image
+    root = tmp_path / 'Music'
+    tagged(root / 'Band' / 'Album' / '01.flac', noise_flac)
+    b = io.BytesIO(); Image.new('RGB', (600, 600), 'red').save(b, 'PNG')
+    (root / 'Band' / 'Album' / 'cover.jpg').write_bytes(b.getvalue())
+    monkeypatch.setattr(check, '_cache', None)
+    client.get('/api/scan', query_string={'root': str(root)})
+    rep = _wait(client, client.post('/api/check', json={}).json['id'])['report']
+    assert rep['converted_covers'] == 1
+    assert Image.open(root / 'Band' / 'Album' / 'cover.jpg').format == 'JPEG'
+    assert 'cover_not_jpeg' not in [i['code'] for a in rep['albums'] for f in a['files'] for i in f['issues']]

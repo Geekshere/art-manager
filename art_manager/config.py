@@ -57,6 +57,7 @@ DEFAULTS = {
     'artist_image_name': 'artist.jpg',
     'disc_covers': True,         # multi-disc albums also need the cover in every disc folder
     'embed_art': True,           # also embed the cover into every track
+    'auto_tidy': True,           # after a scan/check: cover.png + cover.jpg -> one real cover.jpg, old copy deleted
     'update_check': True,        # look for new versions on GitHub every few hours
     'update_auto_install': True, # standalone app: download them and install at the next start
     'settings_version': 3,     # bumped when a migration in _migrate() must run once

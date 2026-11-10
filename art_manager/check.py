@@ -837,6 +837,7 @@ class CheckJob:
         self.total, self.done, self.current = len(self.albums), 0, ''
         self.status, self.cancelled = 'running', False
         self.report = None
+        self.converted = 0
         self.started = time.time()
 
     def progress(self):
@@ -858,6 +859,17 @@ class CheckJob:
                     break
                 self.current = f'{artist} — {al["name"]}'
                 res = check_album(al, self.deep, pool)
+                if config.cfg.get('auto_tidy', True) and any(
+                        f['kind'] == 'cover' and any(i['code'] == 'cover_not_jpeg' for i in f['issues'])
+                        for f in res['files']):
+                    # cover.jpg that is really a PNG: re-save it as a real JPEG, then check again
+                    try:
+                        from .artwork import tidy_album
+                        tidy_album(al)
+                        res = check_album(al, self.deep, pool)
+                        self.converted += 1
+                    except Exception:
+                        pass
                 files_checked += sum(1 for f in res['files'] if f['kind'] == 'track')
                 bad_files = [f for f in res['files'] if f['issues']]
                 for i in res['issues'] + [i for f in bad_files for i in f['issues']]:
@@ -871,7 +883,7 @@ class CheckJob:
         self.report = {'root': self.lib.get('root'), 'finished_at': time.time(), 'deep': self.deep,
                        'complete': not self.cancelled, 'albums_checked': self.done,
                        'files_checked': files_checked, 'seconds': round(time.time() - self.started, 1),
-                       'counts': counts, 'albums': found}
+                       'counts': counts, 'albums': found, 'converted_covers': self.converted}
         try:
             with open(report_file(), 'w', encoding='utf-8') as f:
                 json.dump(self.report, f)

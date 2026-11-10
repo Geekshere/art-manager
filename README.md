@@ -35,11 +35,16 @@ It only ever touches artwork — never tags, genres or filenames.
   remaster), an edition note is suggested from the folder name and written to
   the edition/version field (and optionally the comment or album title), so
   players keep them apart
-- **Wrong image types and names:** `cover.png`, `Cover.JPEG`, `cover.webp`, a
-  `cover.jpg` that is really a PNG — Quick fixes turn them into a real
-  `cover.jpg` (JPEGs copied unchanged, others converted), and by default
-  delete the old copy so players can't show it. An existing `cover.jpg` is
-  kept; unreadable images are never deleted. Same for artist images
+- **One cover file per folder, automatically:** after every scan, folders with
+  two copies (`cover.jpg` + `cover.png`) keep the better one — the bigger copy
+  if both show the same picture, otherwise the existing `cover.jpg` — convert
+  it to the configured name and type, and delete the other. A lone
+  `cover.png` / `Cover.JPEG` / `cover.webp` is converted too, and a check
+  re-saves `cover.jpg` files that are really PNGs. JPEGs are copied unchanged;
+  unreadable images are never deleted. Same for artist images. Can be turned
+  off in Settings (then Quick fixes → Tidy does it on request)
+- **Redacted first:** with an API key, Redacted's covers are searched in
+  parallel with the other sources and always shown first
 - **Tag clean-up:** merges fields written several ways (`ALBUMARTIST`,
   `album_artist`, `ALBUM ARTIST` → one `ALBUMARTIST`), removes duplicate and
   empty values, trims spaces and repairs garbled text (`CafÃ©` → `Café`) —
