@@ -54,6 +54,7 @@ art_manager/
   check.py                 fast FLAC/cover health check (no decoding), cached, library jobs
   updater.py               self-update of the standalone app from GitHub Releases
   redacted.py              Redacted API source (rate limiter, image-host proxy) + edition lookup
+  formats.py               every non-FLAC format: native tag names <-> canonical, pictures, embed, stream info
   tags.py                  Vorbis tags: raw read, canonical names, normalize, problems, write, backup/undo
   musicbrainz.py           MusicBrainz release search + Picard-style tag mapping (1 req/s)
   server.py                Flask routes, path confinement, auth, embed jobs (SSE), CLI main()
@@ -175,7 +176,10 @@ the last 3 candidate headers are tried, and the 512 KB fallback window is used
 only when no header was found at all (this is what keeps damaged files from
 being slow). Per-file results are cached in `check_cache.json` keyed by
 (size, fingerprint) + `CHECK_VERSION`; the last library report is
-`check_report.json`. `flac -t` deep check only for local paths. Bulk cover fix:
+`check_report.json`. Other formats (`check_other_stream`): mutagen parse +
+cheap end checks — MP3 frame chain to EOF, last Ogg page CRC/EOS, MP4 top-level
+boxes, WAV/AIFF/DSF declared size. Deep check (local only): `flac -t`, else
+`ffmpeg -v error -f null`. Bulk cover fix:
 `artwork.fix_album_covers()` (never overwrites an existing cover.jpg).
 
 ### Speed
@@ -242,6 +246,16 @@ complete new tags per track client-side (`tgCompute`) from: tidied current tags
 validates and writes. Track pairing: `server.map_tracks`. Edition notes go to
 `MUSICBRAINZ_ALBUMCOMMENT` (Picard's field); a note from the folder name wins
 over a release's disambiguation.
+
+Other formats (`formats.py`): raw pairs use the format's own key names
+(`TPE2`, `TXXX:MusicBrainz Album Id`, `aART`, `----:com.apple.iTunes:LABEL`,
+`Album Artist`, `WM/AlbumArtist`); `tags.canonical()` maps them through
+`formats.native_canonical()`, so duplicates across names are found the same
+way as in FLAC. Canonical dicts are written under Picard's names
+(`formats.to_native`); raw pairs (undo) are written exactly. Writers replace
+only text fields — APIC/covr/binary APE items/PRIV etc. stay. Unknown native
+keys (`TXXX:iTunNORM`, `TKEY`) pass through unchanged. `normalize()` splits
+`3/12` track/disc numbers. WMA: tags yes, embedding no (`can_embed`).
 
 ### Server safety
 

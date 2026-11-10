@@ -24,6 +24,7 @@ dependencies = [
     "mutagen>=1.47",
     "pillow>=10",
     "requests>=2.31",
+    "certifi",
     "smbprotocol>=1.13",
     "ddgs>=9.0",
 ]

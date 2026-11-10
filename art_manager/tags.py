@@ -1,5 +1,5 @@
 """
-FLAC tags (Vorbis comments): reading, normalising, writing, backups.
+Tags (FLAC Vorbis comments, and via formats.py every other format): reading, normalising, writing, backups.
 
 Vorbis field names are case-insensitive by the spec, but tools happily write
 the same field several ways — ALBUMARTIST, album_artist, "ALBUM ARTIST" — and
@@ -26,13 +26,16 @@ _CANON = [
     'MUSICBRAINZ_TRACKID', 'MUSICBRAINZ_RELEASETRACKID', 'MUSICBRAINZ_ALBUMID', 'MUSICBRAINZ_RELEASEGROUPID',
     'MUSICBRAINZ_ARTISTID', 'MUSICBRAINZ_ALBUMARTISTID', 'MUSICBRAINZ_ALBUMCOMMENT', 'MUSICBRAINZ_WORKID',
     'REPLAYGAIN_TRACK_GAIN', 'REPLAYGAIN_TRACK_PEAK', 'REPLAYGAIN_ALBUM_GAIN', 'REPLAYGAIN_ALBUM_PEAK',
-    'ENCODER', 'ENCODEDBY', 'COPYRIGHT', 'LYRICS', 'BPM', 'MOOD', 'WEBSITE',
+    'ENCODER', 'ENCODEDBY', 'COPYRIGHT', 'LYRICS', 'BPM', 'MOOD', 'WEBSITE', 'GROUPING', 'SUBTITLE', 'REMIXER',
 ]
 _ALIASES = {   # other names for the same field
     'TOTALTRACKS': 'TRACKTOTAL', 'TOTALDISCS': 'DISCTOTAL', 'DISC': 'DISCNUMBER', 'YEAR': 'DATE',
     'CATALOGUENUMBER': 'CATALOGNUMBER', 'CATALOG': 'CATALOGNUMBER', 'ALBUMARTISTS': 'ALBUMARTISTS',
     'MUSICBRAINZRECORDINGID': 'MUSICBRAINZ_TRACKID', 'MUSICBRAINZRELEASEID': 'MUSICBRAINZ_ALBUMID',
-    'ACOUSTIDID': 'ACOUSTID_ID',
+    'ACOUSTIDID': 'ACOUSTID_ID', 'TRACK': 'TRACKNUMBER',
+    # Picard's names in MP3 TXXX frames / M4A freeform atoms / WMA attributes
+    'MUSICBRAINZALBUMTYPE': 'RELEASETYPE', 'MUSICBRAINZALBUMSTATUS': 'RELEASESTATUS',
+    'MUSICBRAINZALBUMRELEASECOUNTRY': 'RELEASECOUNTRY',
 }
 _SQUASH = {re.sub(r'[\s_\-]', '', c): c for c in _CANON}
 _SQUASH.update(_ALIASES)
@@ -52,9 +55,29 @@ def squash(key):
     return re.sub(r'[\s_\-]', '', key.upper())
 
 def canonical(key):
-    """'album_artist' / 'ALBUM ARTIST' / 'AlbumArtist' -> 'ALBUMARTIST'; unknown fields -> upper case."""
+    """
+    'album_artist' / 'ALBUM ARTIST' / 'AlbumArtist' -> 'ALBUMARTIST'; also the
+    native names of other formats ('TPE2', 'TXXX:Album Artist', 'aART',
+    'WM/AlbumArtist' -> 'ALBUMARTIST'). Unknown Vorbis fields -> upper case;
+    unknown native fields ('TXXX:iTunNORM', 'TKEY') -> unchanged.
+    """
+    from .formats import native_canonical
     k = key.strip()
+    n = native_canonical(k)
+    if n is not None:
+        return _SQUASH.get(squash(n)) or (n if n in _CANON else k)
     return _SQUASH.get(squash(k)) or k.upper()
+
+def _is_native(key, canon=None):
+    """
+    A format's own name for a standard field (TPE2, aART, WM/AlbumArtist,
+    TXXX:MusicBrainz Album Id): written back exactly the same way.
+    """
+    from .formats import APE_NAMES, TXXX_NAMES, native_canonical
+    if key.startswith(('TXXX:', '----:')):
+        desc = key.split(':', 2)[-1] if key.startswith('----:') else key[5:]
+        return canon is not None and desc == TXXX_NAMES.get(canon, canon)
+    return native_canonical(key) is not None or key in APE_NAMES.values() or key in ('Track', 'Disc')
 
 def friendly(key):
     return FRIENDLY.get(key, key.title())
@@ -76,7 +99,10 @@ def parse_vorbis_comment(data):
     return out
 
 def read_raw(path):
-    """[(key, value)] of one FLAC, read without loading the pictures (cheap over the network)."""
+    """[(key, value)] of one file as stored; FLACs are read without loading the pictures."""
+    from . import formats
+    if formats.family(path) != 'flac':
+        return formats.read_raw(path)
     with storage.open_file(path, 'rb') as f:
         head = f.read(4)
         off = 4
@@ -135,7 +161,7 @@ def normalize(pairs):
     for c, items in groups.items():
         if len(spellings[c]) > 1:
             notes.append(f'{friendly(c)}: merged {", ".join(spellings[c])} into {c}')
-        elif spellings[c][0] != c:
+        elif spellings[c][0] != c and not _is_native(spellings[c][0], c):
             notes.append(f'{spellings[c][0]} renamed to {c}')
         if c in SINGLE:   # canonical spelling first
             items = sorted(items, key=lambda kv: kv[0] != c)
@@ -161,6 +187,15 @@ def normalize(pairs):
             vals = vals[:1]
         if vals:
             out[c] = vals
+    # '3/12' in the number field (how MP3 / M4A store it): number and total apart
+    for num, tot in (('TRACKNUMBER', 'TRACKTOTAL'), ('DISCNUMBER', 'DISCTOTAL')):
+        v = out.get(num, [''])[0]
+        m = re.match(r'^\s*(\d+)\s*/\s*(\d+)\s*$', v)
+        if m:
+            out[num] = [m.group(1)]
+            if m.group(2) != '0':
+                out.setdefault(tot, [m.group(2)])
+            notes.append(f'{friendly(num)}: "{v}" split into number and total')
     return out, list(dict.fromkeys(notes))
 
 def as_pairs(tagdict):
@@ -205,7 +240,8 @@ def tag_problems(pairs):
         d = [v.strip() for _, v in groups.get(f, []) if v.strip()]
         if d and not _DATE.match(d[0]):
             out.append(('info', 'odd_date', f'{friendly(f)} "{d[0]}" is not in YYYY or YYYY-MM-DD form'))
-    if pairs and all(k == k.lower() for k, _ in pairs) and not any(lvl == 'warn' and code == 'tag_spellings' for lvl, code, _ in out):
+    vorbis_keys = [k for k, _ in pairs if not _is_native(k) and ':' not in k]
+    if vorbis_keys and all(k == k.lower() for k in vorbis_keys) and not any(lvl == 'warn' and code == 'tag_spellings' for lvl, code, _ in out):
         out.append(('info', 'key_case', 'Field names are lower case (fine for most players; Clean up makes them upper case)'))
     return out
 
@@ -223,11 +259,16 @@ def _backup_dir():
 
 def write(path, tags):
     """
-    Replace all tags of one FLAC; pictures are kept. `tags` is {KEY: [values]}
-    or a raw [(key, value)] list — the raw form keeps spellings exactly as
-    given (needed to undo to a state with ALBUMARTIST *and* album_artist).
+    Replace all tags of one file; pictures are kept. `tags` is {KEY: [values]}
+    (written under the format's usual field names) or a raw [(key, value)]
+    list — the raw form keeps spellings exactly as given (needed to undo to a
+    state with ALBUMARTIST *and* album_artist).
     """
     from mutagen.flac import FLAC
+    from . import formats
+    if formats.family(path) != 'flac':
+        pairs = formats.to_native(path, tags) if isinstance(tags, dict) else list(tags)
+        return formats.write(path, pairs)
     pairs = as_pairs(tags) if isinstance(tags, dict) else list(tags)
     with storage.open_file(path, 'rb+') as f:
         audio = FLAC(f)

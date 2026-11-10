@@ -4,9 +4,9 @@ import subprocess, sys, threading, time, traceback, urllib.request, uuid, webbro
 
 from flask import Flask, Response, jsonify, render_template, request
 
-from . import __version__, check, config, storage, tags, updater
+from . import __version__, check, config, formats, storage, tags, updater
 from .artwork import (collect_album_flacs, decode_uploaded_image, dl_image, embed_into,
-                      find_album_embedded, fix_album_covers, read_flac, to_data_url, to_jpeg,
+                      find_album_embedded, fix_album_covers, to_data_url, to_jpeg, track_pictures,
                       write_artist_img, write_covers)
 from .config import cfg, is_ignored, load_cfg, parse_patterns, public_cfg, save_cfg
 from .scan import SCHEMA_VERSION, apply_ignore, client_view, is_track, list_dir, scan_library
@@ -322,7 +322,7 @@ def api_browse():
         parent = None
     return jsonify({'path': path, 'parent': parent,
                     'dirs': [{'name': n, 'path': storage.join(path, n)} for n in dirs],
-                    'flacs': sum(1 for e in entries if not e.is_dir and e.name.lower().endswith('.flac'))})
+                    'flacs': sum(1 for e in entries if not e.is_dir and is_track(e.name))})
 
 @app.route('/api/test-connection')
 def api_test_connection():
@@ -411,12 +411,11 @@ _meta_pool = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_pr
 
 def _read_meta(fpath):
     try:
-        audio = read_flac(fpath)
-        title = tn = ''
-        if audio.tags:
-            title = audio.tags.get('title', [''])[0]
-            tn = audio.tags.get('tracknumber', [''])[0]
-        return bool(audio.pictures), title, tn
+        audio = formats.open_audio(fpath)
+        t = {}
+        for k, v in formats.raw_pairs(audio, fpath):
+            t.setdefault(tags.canonical(k), v)
+        return bool(formats.pictures(audio, fpath)), t.get('TITLE', ''), t.get('TRACKNUMBER', '').split('/')[0]
     except Exception:
         return False, '', ''
 
@@ -430,7 +429,7 @@ def api_album_tracks():
         return jsonify({'error': storage.error_message(e, album_path)}), 502
 
     def tracks(dir_path, names):
-        fpaths = [storage.join(dir_path, f) for f in sorted(names) if f.lower().endswith('.flac')]
+        fpaths = [storage.join(dir_path, f) for f in sorted(names) if is_track(f)]
         metas = list(_meta_pool.map(_read_meta, fpaths))   # parallel: much faster over the network
         return [{'filename': storage.basename(fp), 'path': fp, 'has_art': m[0],
                  'title': m[1], 'track_num': m[2]} for fp, m in zip(fpaths, metas)]
@@ -452,12 +451,13 @@ def api_album_tracks():
 @app.route('/api/track-art')
 def api_track_art():
     fpath = request.args.get('file', '')
-    if not fpath.lower().endswith('.flac') or not _in_library(fpath):
+    if not is_track(storage.basename(fpath)) or not _in_library(fpath):
         return '', 404
     try:
-        audio = read_flac(fpath)
-        if audio.pictures:
-            return Response(audio.pictures[0].data, mimetype=audio.pictures[0].mime)
+        pics = track_pictures(fpath)
+        if pics:
+            p = next((x for x in pics if x['type'] == 3), pics[0])
+            return Response(p['data'], mimetype=p['mime'] or 'image/jpeg')
     except Exception:
         pass
     return '', 404
@@ -759,8 +759,8 @@ def api_tags_apply():
                for c in d.get('changes', [])]
     if (err := _check_paths(*[c['path'] for c in changes])):
         return err
-    if not all(c['path'].lower().endswith('.flac') for c in changes):
-        return jsonify({'error': 'Only FLAC files can be tagged'}), 400
+    if not all(is_track(storage.basename(c['path'])) for c in changes):
+        return jsonify({'error': 'Only music files can be tagged'}), 400
     try:
         backup, errors = tags.apply(changes, label=d.get('label', 'Tag edit'))
     except Exception as e:
@@ -776,9 +776,16 @@ def api_tags_apply_raw():
     path, pairs = d.get('path', ''), [(str(k), str(v)) for k, v in d.get('pairs', [])]
     if (err := _check_paths(path)):
         return err
-    bad = [k for k, _ in pairs if not k or not all(0x20 <= ord(c) <= 0x7D and c != '=' for c in k)]
+    if not is_track(storage.basename(path)):
+        return jsonify({'error': 'Not a music file'}), 400
+    if formats.family(path) in ('flac', 'vorbis'):   # Vorbis comment names: printable ASCII without '='
+        bad = [k for k, _ in pairs if not k or not all(0x20 <= ord(c) <= 0x7D and c != '=' for c in k)]
+        hint = 'plain letters, digits, spaces, _ only'
+    else:                                            # TXXX:..., ©nam, WM/..., ...
+        bad = [k for k, _ in pairs if not k or len(k) > 255 or any(ord(c) < 0x20 or c == '\x7f' for c in k)]
+        hint = 'no control characters'
     if bad:
-        return jsonify({'error': f'Invalid field name: {bad[0]!r} (plain letters, digits, spaces, _ only)'}), 400
+        return jsonify({'error': f'Invalid field name: {bad[0]!r} ({hint})'}), 400
     backup, errors = tags.apply([{'path': path, 'tags': pairs}], label=f'Raw edit: {storage.basename(path)}')
     return jsonify({'backup': backup, 'errors': errors})
 
@@ -946,7 +953,7 @@ def prepare(argv=None):
     """Parse the command line, remember what was given, work out host/port. -> (host, port, wanted, open_browser)"""
     load_cfg()
     frozen = getattr(sys, 'frozen', False)   # the standalone app (PyInstaller)
-    parser = argparse.ArgumentParser(prog='art-manager', description='Art Manager — artwork for a FLAC library')
+    parser = argparse.ArgumentParser(prog='art-manager', description='Art Manager — artwork and tags for a music library')
     parser.add_argument('library', nargs='?',
                         help='Local path, smb://host/share/path, or webdav(s)://host/path (saved)')
     def port_number(v):

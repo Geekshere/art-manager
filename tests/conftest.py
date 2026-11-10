@@ -129,3 +129,10 @@ def client(tmp_path, monkeypatch):
         yield c
     config.cfg.clear(); config.cfg.update(saved)
     storage.reset_all()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_dir(tmp_path_factory, monkeypatch):
+    """No test may write caches, reports or backups into the source tree."""
+    if os.path.abspath(config.DATA_DIR).startswith(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))):
+        monkeypatch.setattr(config, 'DATA_DIR', str(tmp_path_factory.mktemp('data')))

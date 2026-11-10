@@ -32,8 +32,8 @@ def codes(res, level=None):
 
 def test_healthy_file_has_no_issues(tmp_path, noise_flac):
     p = tagged(tmp_path / 'ok.flac', noise_flac)
-    assert check.check_flac(str(p))['issues'] == []
-    info = check.check_flac(str(p))['info']
+    assert check.check_file(str(p))['issues'] == []
+    info = check.check_file(str(p))['info']
     assert info['sample_rate'] == 44100 and info['channels'] == 2 and info['tags']['TITLE'] == 'Song 1'
 
 @pytest.mark.parametrize('cut,code', [(0.5, 'truncated'), (0.999, 'damaged_end')])
@@ -41,24 +41,24 @@ def test_cut_off_file_is_an_error(tmp_path, noise_flac, cut, code):
     p = tagged(tmp_path / 'ok.flac', noise_flac)
     data = p.read_bytes()
     p.write_bytes(data[:int(len(data) * cut)])
-    res = check.check_flac(str(p))
+    res = check.check_file(str(p))
     assert code in codes(res, 'error'), res
 
 def test_corrupted_last_byte(tmp_path, noise_flac):
     p = tagged(tmp_path / 'ok.flac', noise_flac)
     d = bytearray(p.read_bytes()); d[-1] ^= 0xFF; p.write_bytes(bytes(d))
-    assert 'damaged_end' in codes(check.check_flac(str(p)), 'error')
+    assert 'damaged_end' in codes(check.check_file(str(p)), 'error')
 
 def test_not_flac_and_id3(tmp_path, noise_flac):
     p = tmp_path / 'x.flac'; p.write_bytes(b'not audio at all' * 100)
-    assert codes(check.check_flac(str(p))) == ['not_flac']
+    assert codes(check.check_file(str(p))) == ['not_flac']
     ok = tagged(tmp_path / 'ok.flac', noise_flac).read_bytes()
     p.write_bytes(b'ID3\x03\x00\x00\x00\x00\x00\x0a' + b'\x00' * 10 + ok)
-    assert codes(check.check_flac(str(p))) == ['id3']
+    assert codes(check.check_file(str(p))) == ['id3']
 
 def test_missing_tags_and_art_are_warnings(tmp_path, noise_flac):
     p = tagged(tmp_path / 'x.flac', noise_flac, title=False, art=False)
-    res = check.check_flac(str(p))
+    res = check.check_file(str(p))
     assert set(codes(res, 'warn')) == {'missing_tags', 'no_art'}
     assert 'title' in next(i['msg'] for i in res['issues'] if i['code'] == 'missing_tags')
 
@@ -106,8 +106,8 @@ def test_library_check_job_and_cache(client, tmp_path, noise_flac, monkeypatch):
     assert client.get('/api/check').json['report']['files_checked'] == 2
     # second run: nothing unchanged is read again
     calls = []
-    real = check.check_flac
-    monkeypatch.setattr(check, 'check_flac', lambda *a, **k: calls.append(a) or real(*a, **k))
+    real = check.check_file
+    monkeypatch.setattr(check, 'check_file', lambda *a, **k: calls.append(a) or real(*a, **k))
     _wait(client, client.post('/api/check', json={}).json['id'])
     assert calls == []
     # a changed file is checked again
@@ -122,7 +122,7 @@ def test_check_album_endpoint(client, make_library):
     al = next(a for a in lib['artists'] if a['name'] == 'Alpha')['albums'][0]
     r = client.post('/api/check-album', json={'name': al['name'], 'path': al['path'], 'disc_info': al['disc_info']})
     assert r.status_code == 200
-    assert {f['kind'] for f in r.json['files']} == {'flac', 'cover'}
+    assert {f['kind'] for f in r.json['files']} == {'track', 'cover'}
     r = client.post('/api/check-album', json={'path': str(root.parent), 'disc_info': []})
     assert r.status_code == 403   # confined to the library
 

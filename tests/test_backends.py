@@ -262,7 +262,7 @@ def test_file_check_through_backend(client, backend):
     lib = _scan(client, url)
     al = _album(lib, 'Alpha', 'First')
     r = client.post('/api/check-album', json={'name': al['name'], 'path': al['path'], 'disc_info': al['disc_info']}).json
-    flacs = [f for f in r['files'] if f['kind'] == 'flac']
+    flacs = [f for f in r['files'] if f['kind'] == 'track']
     assert len(flacs) == 2
     for f in flacs:   # silent fixture tracks: valid audio, just untagged / no art
         assert not [i for i in f['issues'] if i['level'] == 'error'], f

@@ -57,6 +57,10 @@ jobs:
           # save first: `curl | grep -q` fails with pipefail when grep stops reading early
           curl -sf localhost:5077/ -o smoke/page.html && grep -q "<title>Art Manager" smoke/page.html
           curl -sf localhost:5077/api/scan -o smoke/scan.json && grep -q '"name":"Some Artist"' smoke/scan.json
+          # the update check must get through TLS with the certificates bundled in the app
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{}' localhost:5077/api/update/check -o smoke/update.json
+          cat smoke/update.json
+          if grep -q CERTIFICATE smoke/update.json; then echo "TLS certificate problem"; exit 1; fi
       - name: Zip (macOS keeps the executable bit)
         if: runner.os == 'macOS'
         run: cd out && zip ${{ matrix.file }}.zip ${{ matrix.file }} && rm ${{ matrix.file }}

@@ -190,7 +190,7 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
     <a id="hdr-errors" href="#" class="warn hidden" style="font-size:11px" onclick="toggleScanErrors();return false"></a>
     <button onclick="showV('v-settings')">Settings</button>
     <button onclick="showMissing()">Missing Report</button>
-    <button onclick="showCheck()" title="Find damaged FLAC files, missing tags and bad covers">Check Files</button>
+    <button onclick="showCheck()" title="Find damaged music files, odd or missing tags and bad covers">Check Files</button>
     <button onclick="quitApp()" title="Stop Art Manager">⏻ Quit</button>
 </div>
 
@@ -510,8 +510,8 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
         <h2 style="margin:0">Check files</h2>
         <button onclick="goBack()">← Back</button>
     </div>
-    <p class="note" style="max-width:760px">Reads only the start and end of each FLAC file — so it is quick even over the network — and finds
-        files that are cut off or damaged, missing tags (title, artist, album, track number), tracks without an embedded cover,
+    <p class="note" style="max-width:760px">Reads only the start and end of each music file (FLAC, MP3, M4A, Ogg, Opus, WavPack, WAV, AIFF, …) — so it is quick even over the network — and finds
+        files that are cut off or damaged, odd tags, missing tags (title, artist, album, track number), tracks without an embedded cover,
         unreadable or low-resolution <code class="cn">cover.jpg</code> files, and albums whose tracks disagree. Files that haven't changed
         since the last check are not read again.</p>
     <div style="display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap">
@@ -1148,7 +1148,7 @@ async function fbLoad(path){
     document.getElementById('fb-up').disabled=(fbParent===null||fbParent===undefined);
     document.getElementById('fb-use').disabled=!fbCur;
     setEl('fb-hint', fbCur ? (d.dirs.length+' folder'+(d.dirs.length===1?'':'s')+' here'+
-        (d.flacs?' · '+d.flacs+' FLAC files — this looks like an album, choose the folder above your artists':'')) : '');
+        (d.flacs?' · '+d.flacs+' music files — this looks like an album, choose the folder above your artists':'')) : '');
 }
 function fbUp(){ if(fbParent!==null&&fbParent!==undefined) fbLoad(fbParent); }
 function fbChoose(){
@@ -1217,7 +1217,7 @@ function renderSkipped(){
     document.getElementById('hdr-skipped-wrap').classList.toggle('hidden',!sk.length);
     setEl('hdr-skipped',sk.length+' folder'+(sk.length===1?'':'s')+' without albums skipped');
     document.getElementById('hdr-skipped-pop').innerHTML=
-        '<div>These top-level folders have no FLAC albums inside, so they are not listed as artists:</div>'+
+        '<div>These top-level folders have no albums with music files inside, so they are not listed as artists:</div>'+
         '<ul>'+sk.map(n=>'<li>'+esc(n)+'</li>').join('')+'</ul>'+
         '<div class="note">Folders on the ignore list (Settings) are left out without being counted here.</div>';
 }
@@ -1749,7 +1749,7 @@ async function showCheck(){
         const d=await api('/api/check');
         const deep=document.getElementById('chk-deep');
         deep.disabled=!d.deep_available;
-        document.getElementById('chk-deep-lbl').title=d.deep_available?'':'Install the "flac" program to enable this';
+        document.getElementById('chk-deep-lbl').title=d.deep_available?'':'Install the "flac" or "ffmpeg" program to enable this';
         checkReport=d.report;
         if(d.running){ checkJob=d.running.id; pollCheck(); }
         renderCheckReport();
@@ -1854,7 +1854,7 @@ async function checkThisAlbum(){
         let errs=0, warns=0;
         d.files.forEach(f=>f.issues.forEach(i=>{ if(i.level==='error') errs++; else if(i.level==='warn') warns++; }));
         d.issues.forEach(i=>{ if(i.level==='error') errs++; else if(i.level==='warn') warns++; });
-        d.files.filter(f=>f.kind==='flac'&&f.issues.some(i=>i.level!=='info')).forEach(f=>{
+        d.files.filter(f=>f.kind==='track'&&f.issues.some(i=>i.level!=='info')).forEach(f=>{
             const row=[...document.querySelectorAll('#alb-tracks .track-row')].find(r=>r.dataset.path===f.path);
             if(!row) return;
             const bad=f.issues.some(i=>i.level==='error');

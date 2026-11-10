@@ -16,7 +16,7 @@ kinds of installs (pip/uv, source checkout, Docker) get the right command to
 run instead.
 """
 import hashlib, json, logging, os, platform, shutil, subprocess, sys, threading, time
-import urllib.request, zipfile
+import ssl, urllib.request, zipfile
 
 from . import __version__, config
 
@@ -115,10 +115,25 @@ def public_state():
 
 # ── check ─────────────────────────────────────────────────────────────────────
 
+def _ssl_context():
+    """
+    Certificates from certifi (shipped with the app): the standalone macOS app
+    can't see a certificate store, so the default context fails there with
+    CERTIFICATE_VERIFY_FAILED.
+    """
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+def _open(req, timeout):
+    return urllib.request.urlopen(req, timeout=timeout, context=_ssl_context())
+
 def _get_json(url):
     req = urllib.request.Request(url, headers={'Accept': 'application/vnd.github+json',
                                                'User-Agent': f'art-manager/{__version__}'})
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with _open(req, 15) as r:
         return json.load(r)
 
 def check():
@@ -191,7 +206,7 @@ def download():
         expected_size = int(asset.get('size') or 0)
         sha = hashlib.sha256()
         req = urllib.request.Request(url, headers={'User-Agent': f'art-manager/{__version__}'})
-        with urllib.request.urlopen(req, timeout=60) as r, open(part, 'wb') as f:
+        with _open(req, 60) as r, open(part, 'wb') as f:
             total = expected_size or int(r.headers.get('Content-Length') or 0)
             done = 0
             while True:

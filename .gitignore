@@ -16,3 +16,7 @@ compose.yaml
 
 # node (browser tests)
 node_modules/
+check_cache.json
+check_report.json
+tag_backups/
+updates/

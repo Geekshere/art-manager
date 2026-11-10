@@ -1,5 +1,5 @@
 """
-Fast health check for FLAC files and covers — without decoding audio.
+Fast health check for audio files (FLAC in depth; MP3, M4A, Ogg, Opus, WAV, AIFF, ... too) and covers — without decoding audio.
 
 Per file it reads only the metadata blocks (skipping over embedded pictures)
 and a few KB at the start and end of the audio, so it is quick even over SMB
@@ -26,10 +26,10 @@ A full decode (`flac -t`) is optional and only for local files.
 """
 import io, os, shutil, struct, subprocess
 
-from . import storage
+from . import formats, storage
 from . import tags as tagmod
 
-CHECK_VERSION = 2          # bump to invalidate cached results when checks change
+CHECK_VERSION = 3          # bump to invalidate cached results when checks change
 MIN_COVER_PX = 500
 BIG_PICTURE = 4 * 1024 * 1024
 HEAD_READ = 64 * 1024
@@ -255,6 +255,14 @@ def check_flac_stream(f, size):
     if tail_issue:
         issues.append(tail_issue)
 
+    if not si['total_samples']:
+        issues.append(_issue('info', 'unknown_length', 'The file does not record its length'))
+    _common_checks(issues, tags, raw_tags, pictures, si, lossless=True)
+    return {'issues': issues, 'info': info}
+
+
+def _common_checks(issues, tags, raw_tags, pictures, si, lossless):
+    """Checks shared by every format: tags, embedded pictures, unusual audio."""
     # tags and art
     missing = [k.lower() for k in ('TITLE', 'ARTIST', 'ALBUM', 'TRACKNUMBER') if not tags.get(k, '').strip()]
     if missing:
@@ -267,8 +275,6 @@ def check_flac_stream(f, size):
     if big:
         issues.append(_issue('info', 'big_picture',
                              f'Embedded picture is {big[0]["size"] // (1024 * 1024)} MB (makes every track larger)'))
-    if not si['total_samples']:
-        issues.append(_issue('info', 'unknown_length', 'The file does not record its length'))
 
     # odd tags: the same field under several names, duplicates, garbled text, ...
     for level, code, msg in tagmod.tag_problems(raw_tags):
@@ -284,15 +290,14 @@ def check_flac_stream(f, size):
     if small:
         issues.append(_issue('info', 'small_picture', f'Embedded cover is only {small[0]["width"]}×{small[0]["height"]} px'))
     # unusual audio formats
-    if si['channels'] == 1:
+    if si.get('channels') == 1:
         issues.append(_issue('info', 'mono', 'Mono recording'))
-    elif si['channels'] > 2:
+    elif (si.get('channels') or 0) > 2:
         issues.append(_issue('info', 'multichannel', f'{si["channels"]} channels (multichannel)'))
-    if si['sample_rate'] and si['sample_rate'] < 44100:
+    if si.get('sample_rate') and si['sample_rate'] < 44100:
         issues.append(_issue('info', 'low_rate', f'Low sample rate: {si["sample_rate"] / 1000:g} kHz'))
-    if si['bits'] not in (16, 24):
+    if lossless and si['bits'] and si['bits'] not in (16, 24):
         issues.append(_issue('info', 'odd_bits', f'Unusual bit depth: {si["bits"]}-bit'))
-    return {'issues': issues, 'info': info}
 
 
 def _check_tail(r, audio_off, size, si, issues):
@@ -345,26 +350,259 @@ def _check_tail(r, audio_off, size, si, issues):
     return _issue('error', 'damaged_end', 'The end of the file is damaged (last audio frame is incomplete)')
 
 
+# ── Other formats ─────────────────────────────────────────────────────────────
+
+_MPEG_BR = {   # (version is MPEG-1, layer) -> kbps by index
+    (True, 1): [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+    (True, 2): [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+    (True, 3): [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+    (False, 1): [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+    (False, 2): [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+}
+_MPEG_SR = {3: (44100, 48000, 32000), 2: (22050, 24000, 16000), 0: (11025, 12000, 8000)}
+
+def mpeg_frame_len(buf, p):
+    """Length of the MP3 (MPEG audio) frame whose header is at buf[p], or None if it isn't one."""
+    if p + 4 > len(buf) or buf[p] != 0xFF or buf[p + 1] & 0xE0 != 0xE0:
+        return None
+    ver, layer_bits = (buf[p + 1] >> 3) & 3, (buf[p + 1] >> 1) & 3
+    br_i, sr_i, pad = buf[p + 2] >> 4, (buf[p + 2] >> 2) & 3, (buf[p + 2] >> 1) & 1
+    if ver == 1 or layer_bits == 0 or br_i in (0, 15) or sr_i == 3:
+        return None
+    layer = 4 - layer_bits
+    v1 = ver == 3
+    br = _MPEG_BR[(v1, layer)] if v1 else _MPEG_BR[(False, 1 if layer == 1 else 2)]
+    kbps, sr = br[br_i], _MPEG_SR[ver][sr_i]
+    if layer == 1:
+        return (12 * kbps * 1000 // sr + pad) * 4
+    if layer == 3 and not v1:
+        return 72 * kbps * 1000 // sr + pad
+    return 144 * kbps * 1000 // sr + pad
+
+def _strip_end_tags(buf):
+    """Remove ID3v1 / APEv2 / Lyrics3 tags from the end of a tail buffer."""
+    for _ in range(3):
+        if len(buf) >= 128 and buf[-128:-125] == b'TAG':
+            buf = buf[:-128]
+        elif len(buf) >= 32 and buf[-32:-24] == b'APETAGEX':
+            ape = int.from_bytes(buf[-20:-16], 'little') + 32
+            buf = buf[:max(0, len(buf) - ape)]
+        elif len(buf) >= 15 and buf[-9:] == b'LYRICS200':
+            try:
+                buf = buf[:max(0, len(buf) - 15 - int(buf[-15:-9]))]
+            except ValueError:
+                break
+        else:
+            break
+    return buf
+
+def _mp3_end(f, size):
+    """An issue if the last MP3 frame is cut off (a file stopped downloading/copying part-way)."""
+    n = min(size, 16 * 1024)
+    f.seek(size - n)
+    buf = _strip_end_tags(f.read(n))
+    # find a run of 3 frames that follow each other, then walk to the end
+    for p in range(0, max(0, len(buf) - 4)):
+        l1 = mpeg_frame_len(buf, p)
+        if not l1:
+            continue
+        l2 = mpeg_frame_len(buf, p + l1)
+        if not l2 or not mpeg_frame_len(buf, p + l1 + l2):
+            continue
+        pos = p
+        while True:
+            ln = mpeg_frame_len(buf, pos)
+            if not ln:
+                break
+            if pos + ln > len(buf):
+                return _issue('error', 'truncated', 'File is cut off: the last audio frame is incomplete')
+            pos += ln
+            if pos == len(buf):
+                return None
+        if len(buf) - pos > 2048:
+            return _issue('warn', 'damaged_end', f'{len(buf) - pos} bytes of unknown data after the audio')
+        return None
+    return None    # couldn't find frames (very short file): no verdict
+
+_OGG_CRC = _table(0x04C11DB7, 32)
+
+def _ogg_crc(data):
+    c = 0
+    for b in data:
+        c = ((c << 8) & 0xFFFFFFFF) ^ _OGG_CRC[(c >> 24) ^ b]
+    return c
+
+def _ogg_end(f, size):
+    """The last Ogg page must end exactly at the end of the file, pass its CRC and mark the end of the stream."""
+    n = min(size, 70 * 1024)
+    f.seek(size - n)
+    buf = f.read(n)
+    p = len(buf)
+    while True:
+        p = buf.rfind(b'OggS', 0, p)
+        if p < 0 or len(buf) - p < 27:
+            return None if p < 0 else _issue('error', 'truncated', 'File is cut off inside the last Ogg page')
+        if buf[p + 4] != 0:
+            continue
+        nseg = buf[p + 26]
+        if p + 27 + nseg > len(buf):
+            return _issue('error', 'truncated', 'File is cut off inside the last Ogg page')
+        end = p + 27 + nseg + sum(buf[p + 27:p + 27 + nseg])
+        if end > len(buf):
+            return _issue('error', 'truncated', 'File is cut off: the last Ogg page is incomplete')
+        page = bytearray(buf[p:end])
+        crc = int.from_bytes(page[22:26], 'little')
+        page[22:26] = b'\0\0\0\0'
+        if _ogg_crc(page) != crc:
+            continue          # 'OggS' inside audio data, or a damaged page: look further back
+        if end < len(buf):
+            return _issue('warn', 'damaged_end', f'{len(buf) - end} bytes of unknown data after the audio')
+        if not buf[p + 5] & 4:
+            return _issue('warn', 'no_eos', 'The stream has no end marker (file may be cut off)')
+        return None
+
+def _mp4_end(f, size):
+    """Top-level boxes must add up to the file size and include the index ('moov')."""
+    off, seen = 0, set()
+    for _ in range(200):
+        if off >= size:
+            break
+        f.seek(off)
+        h = f.read(16)
+        if len(h) < 8:
+            return _issue('error', 'truncated', 'File is cut off inside a box header')
+        bsize, btype = int.from_bytes(h[:4], 'big'), h[4:8].decode('latin-1')
+        if bsize == 1:
+            bsize = int.from_bytes(h[8:16], 'big')
+        elif bsize == 0:
+            bsize = size - off
+        if bsize < 8:
+            return _issue('error', 'bad_metadata', f'Damaged box "{btype}"')
+        if off + bsize > size:
+            return _issue('error', 'truncated', f'File is cut off: the "{btype}" box needs '
+                          f'{off + bsize - size:,} more bytes')
+        seen.add(btype)
+        off += bsize
+    if 'moov' not in seen:
+        return _issue('error', 'bad_metadata', 'No "moov" box (the file cannot be played)')
+    return None
+
+def _chunked_end(f, size, path):
+    """WAV / AIFF / DSF record their own length: a shorter file is cut off."""
+    f.seek(0)
+    h = f.read(20)
+    e = formats.ext(path)
+    if e == '.wav' and h[:4] in (b'RIFF', b'RF64'):
+        claimed = int.from_bytes(h[4:8], 'little') + 8
+    elif e in ('.aif', '.aiff', '.aifc') and h[:4] == b'FORM':
+        claimed = int.from_bytes(h[4:8], 'big') + 8
+    elif e == '.dsf' and h[:4] == b'DSD ':
+        claimed = int.from_bytes(h[12:20], 'little')
+    else:
+        return None
+    if h[:4] == b'RF64' or claimed in (8, 0xFFFFFFFF + 8):
+        return None                        # size kept elsewhere / unknown (streamed)
+    if size < claimed:
+        return _issue('error', 'truncated', f'File is cut off: {claimed - size:,} bytes missing')
+    return None
+
+
+def check_other_stream(f, size, path):
+    """Check an open MP3 / M4A / Ogg / Opus / WavPack / ... file."""
+    from PIL import Image
+    issues, info = [], {}
+    name = formats.FORMAT_NAME.get(formats.ext(path), 'audio')
+    try:
+        audio = formats.load(f, path)
+    except Exception as e:
+        msg = str(e).strip() or type(e).__name__
+        return {'issues': [_issue('error', 'not_audio', f'Not a readable {name} file ({msg[:120]})')], 'info': info}
+    si = formats.stream_info(audio, path)
+    raw_tags = formats.raw_pairs(audio, path)
+    tags = {}
+    for k, v in raw_tags:
+        tags.setdefault(tagmod.canonical(k), v)
+    for num, tot in (('TRACKNUMBER', 'TRACKTOTAL'), ('DISCNUMBER', 'DISCTOTAL')):
+        a, _, b = tags.get(num, '').partition('/')
+        if b.strip().isdigit():
+            tags[num] = a.strip()
+            tags.setdefault(tot, b.strip())
+    pictures = []
+    for pic in formats.pictures(audio, path):
+        w = h = 0
+        try:
+            w, h = Image.open(io.BytesIO(pic['data'])).size
+        except Exception:
+            pass
+        pictures.append({'type': int(pic['type']), 'mime': pic['mime'] or '', 'size': len(pic['data']),
+                         'real': formats._sniff(pic['data']), 'width': w, 'height': h})
+    info.update(sample_rate=si['sample_rate'], bits=si['bits'], channels=si['channels'], seconds=si['seconds'],
+                bitrate=si['bitrate'], format=si['format'], pictures=len(pictures),
+                tags={k: tags[k] for k in ('TITLE', 'ARTIST', 'ALBUM', 'ALBUMARTIST', 'TRACKNUMBER', 'TRACKTOTAL',
+                                           'DISCNUMBER', 'DATE') if k in tags})
+    if not si['seconds']:
+        issues.append(_issue('error', 'no_audio', 'No audio (length 0:00)'))
+    fam, e = formats.family(path), formats.ext(path)
+    try:
+        if e == '.mp3':
+            end = _mp3_end(f, size)
+            if getattr(audio.info, 'sketchy', False):
+                issues.append(_issue('warn', 'sketchy', 'Could not find clean MP3 frames at the start (damaged or not really MP3)'))
+        elif e in ('.ogg', '.oga', '.opus', '.spx'):
+            end = _ogg_end(f, size)
+        elif fam == 'mp4':
+            end = _mp4_end(f, size)
+        else:
+            end = _chunked_end(f, size, path)
+    except Exception:
+        end = None
+    if end:
+        issues.append(end)
+    lossless = e in ('.wav', '.aif', '.aiff', '.aifc', '.wv', '.ape', '.dsf') or \
+        (fam == 'mp4' and 'alac' in si['codec'])
+    _common_checks(issues, tags, raw_tags, pictures, si, lossless=lossless and e != '.dsf')
+    if not lossless and si['bitrate'] and si['bitrate'] < (96 if e == '.opus' else 160):
+        issues.append(_issue('info', 'low_bitrate', f'Low bitrate: {si["bitrate"]} kbps'))
+    return {'issues': issues, 'info': info}
+
+
 # ── Per file / per album ──────────────────────────────────────────────────────
 
-def check_flac(path, size=None):
+def check_file(path, size=None):
     try:
         if size is None:
             size = storage.stat(path).size
         with storage.open_file(path, 'rb') as f:
-            return check_flac_stream(f, size)
+            if formats.family(path) == 'flac':
+                return check_flac_stream(f, size)
+            return check_other_stream(f, size, path)
     except Exception as e:
         return {'issues': [_issue('error', 'unreadable', f'Could not read the file: {storage.error_message(e, path)}')],
                 'info': {}}
 
 
+check_flac = check_file   # old name
+
 def deep_check_available():
-    return shutil.which('flac') is not None
+    return shutil.which('flac') is not None or shutil.which('ffmpeg') is not None
+
+def _ffmpeg_check(path):
+    try:
+        p = subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-i', path, '-f', 'null', '-'],
+                           capture_output=True, text=True, timeout=900)
+    except Exception as e:
+        return _issue('error', 'decode', f'Full decode failed to run: {e}')
+    lines = [l.strip() for l in (p.stderr or '').splitlines() if l.strip()]
+    if p.returncode != 0 or lines:
+        return _issue('error', 'decode', 'Full decode: ' + (lines[0][:200] if lines else 'failed'))
+    return None
 
 def deep_check(path):
-    """Decode the whole file with the reference `flac` tool (local files only)."""
+    """Decode the whole file with `flac -t` (FLAC) or ffmpeg (anything) — local files only."""
     if storage.kind(path) != 'local' or not deep_check_available():
         return None
+    if formats.family(path) != 'flac' or not shutil.which('flac'):
+        return _ffmpeg_check(path) if shutil.which('ffmpeg') else None
     try:
         p = subprocess.run(['flac', '-t', '-s', path], capture_output=True, text=True, timeout=600)
     except Exception as e:
@@ -429,8 +667,23 @@ def album_issues(file_results, album_name, extras=None, multi_disc=False):
                           + (' …' if len(extras['junk']) > 8 else '')))
     if extras.get('other_audio'):
         kinds = sorted({n.rsplit('.', 1)[-1].upper() for n in extras['other_audio']})
-        out.append(_issue('warn', 'other_audio', f'Also contains {len(extras["other_audio"])} non-FLAC audio '
-                          f'file(s) ({", ".join(kinds)}) — players may show duplicate tracks'))
+        out.append(_issue('info', 'other_audio', f'{len(extras["other_audio"])} audio file(s) in a format this app '
+                          f'does not read ({", ".join(kinds)})'))
+    # the same track in two formats (FLAC + MP3 copies): players list both
+    stems = {}
+    for r in file_results:
+        name = r.get('name') or ''
+        stem, dot, ext = name.rpartition('.')
+        if dot:
+            stems.setdefault(stem.casefold(), []).append(ext.upper())
+    dupes = {s: e for s, e in stems.items() if len(e) > 1}
+    if dupes:
+        ex = next(iter(dupes.items()))
+        out.append(_issue('warn', 'same_track_formats', f'{len(dupes)} track(s) are here in more than one format '
+                          f'(e.g. "{ex[0]}": {", ".join(ex[1])}) — players will show them twice'))
+    fmts = sorted({i.get('format') or 'FLAC' for i in infos})
+    if len(fmts) > 1 and not dupes:
+        out.append(_issue('info', 'mixed_codecs', 'Album mixes formats: ' + ', '.join(fmts)))
     albums = {i['tags'].get('ALBUM', '').strip() for i in infos if i.get('tags', {}).get('ALBUM')}
     if len(albums) > 1:
         out.append(_issue('warn', 'album_mismatch', 'Tracks disagree on the album name: ' +
@@ -500,7 +753,7 @@ def _save_cache():
 
 _JUNK = ('thumbs.db', 'desktop.ini', '.ds_store')
 _JUNK_EXT = ('.part', '.tmp', '.crdownload', '.!qb', '.bak')
-_OTHER_AUDIO = ('.mp3', '.m4a', '.aac', '.ogg', '.opus', '.wav', '.aif', '.aiff', '.ape', '.wv', '.wma', '.alac', '.dsf')
+_OTHER_AUDIO = ('.aac', '.ac3', '.dts', '.mka', '.tta', '.tak', '.dff', '.mp2', '.mid', '.midi')  # not read
 
 def _album_tasks(album):
     """
@@ -515,7 +768,7 @@ def _album_tasks(album):
         for name, e in sorted(files.items()):
             low = name.lower()
             if is_track(name):
-                tasks.append(('flac', storage.join(folder, name), e))
+                tasks.append(('track', storage.join(folder, name), e))
             elif low.startswith('._') or low in _JUNK or low.endswith(_JUNK_EXT):
                 extras['junk'].append(prefix + name)
             elif low.endswith(_OTHER_AUDIO):
@@ -528,7 +781,7 @@ def _album_tasks(album):
 
 def _run_task(kind, path, entry, deep):
     cache = _load_cache()
-    key = ('deep:' if deep and kind == 'flac' else '') + path
+    key = ('deep:' if deep and kind == 'track' else '') + path
     fp = entry.fingerprint if entry is not None else None
     hit = cache.get(key)
     if hit and fp and hit.get('fp') == fp and hit.get('size') == entry.size:
@@ -536,7 +789,7 @@ def _run_task(kind, path, entry, deep):
     if kind == 'cover':
         result = {'issues': check_cover(path), 'info': {}}
     else:
-        result = check_flac(path, entry.size if entry is not None else None)
+        result = check_file(path, entry.size if entry is not None else None)
         if deep and not any(i['level'] == 'error' for i in result['issues']):
             d = deep_check(path)
             if d:
@@ -565,9 +818,9 @@ def check_album(album, deep=False, pool=None):
         return p[len(base) + 1:].replace('\\', '/') if p.startswith(base) and len(p) > len(base) else storage.basename(p)
     files = [{'name': rel(p), 'path': p, 'kind': k, 'issues': r['issues'], 'info': r.get('info', {})}
              for (k, p, _), r in zip(tasks, results)]
-    flacs = [f for f in files if f['kind'] == 'flac']
+    tracks = [f for f in files if f['kind'] == 'track']
     multi = any(d.get('path') != album['path'] for d in album.get('disc_info', []))
-    return {'issues': album_issues(flacs, album['name'], extras, multi), 'files': files}
+    return {'issues': album_issues(tracks, album['name'], extras, multi), 'files': files}
 
 
 class CheckJob:
@@ -599,7 +852,7 @@ class CheckJob:
                     break
                 self.current = f'{artist} — {al["name"]}'
                 res = check_album(al, self.deep, pool)
-                files_checked += sum(1 for f in res['files'] if f['kind'] == 'flac')
+                files_checked += sum(1 for f in res['files'] if f['kind'] == 'track')
                 bad_files = [f for f in res['files'] if f['issues']]
                 for i in res['issues'] + [i for f in bad_files for i in f['issues']]:
                     counts[i['level']] += 1

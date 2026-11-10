@@ -1,10 +1,8 @@
-"""Reading/writing artwork: cover.jpg, artist.jpg, and pictures embedded in FLACs."""
+"""Reading/writing artwork: cover.jpg, artist.jpg, and pictures embedded in the tracks (any format)."""
 import base64, io
 
 import requests
-from mutagen.flac import FLAC, Picture
-
-from . import storage
+from . import formats, storage
 from .config import cfg
 from .scan import is_track, list_dir
 
@@ -54,15 +52,20 @@ def collect_album_flacs(disc_info):
             continue
         seen.add(disc['path'])
         try:
-            flacs.extend(_flacs_in(disc['path']))
+            flacs.extend(p for p in _flacs_in(disc['path']) if formats.can_embed(p))
         except Exception:
             pass
     return flacs
 
 
-def read_flac(path):
-    with storage.open_file(path, 'rb') as fh:
-        return FLAC(fh)
+def read_audio(path):
+    return formats.open_audio(path)
+
+read_flac = read_audio   # old name
+
+def track_pictures(path):
+    """[{'type', 'mime', 'data'}] embedded in one track."""
+    return formats.pictures(formats.open_audio(path), path)
 
 
 def find_album_embedded(album_path, disc_info):
@@ -75,11 +78,12 @@ def find_album_embedded(album_path, disc_info):
             continue
         for f in flacs:
             try:
-                audio = read_flac(f)
+                pics = track_pictures(f)
             except Exception:
                 continue
-            if audio.pictures:
-                return audio.pictures[0].data, audio.pictures[0].mime
+            if pics:
+                front = next((p for p in pics if p['type'] == 3), pics[0])
+                return front['data'], front['mime'] or 'image/jpeg'
     return None, None
 
 
@@ -152,19 +156,13 @@ def write_artist_img(artist_path, data, mime):
                         find_artist_image)
 
 
-def embed_into(flac_path, data, mime):
-    """Replace the pictures in one FLAC with this front cover."""
-    pic = Picture()
-    pic.type = 3; pic.mime = mime; pic.data = data
-    # One read+write handle for load and save. Local files and SMB edit in
-    # place; WebDAV hands back an in-memory copy that is uploaded on close.
-    # save() re-reads the header to sanity-check it, so the handle must be
-    # rewound first — load() leaves the position after the metadata.
-    with storage.open_file(flac_path, 'rb+') as f:
-        audio = FLAC(f)
-        audio.clear_pictures(); audio.add_picture(pic)
-        f.seek(0)
-        audio.save(f)
+def embed_into(path, data, mime):
+    """
+    Replace the pictures in one track with this front cover. One read+write
+    handle for load and save: local files and SMB edit in place; WebDAV hands
+    back an in-memory copy that is uploaded on close.
+    """
+    formats.embed(path, data, mime)
 
 
 # ── Bulk fix ──────────────────────────────────────────────────────────────────
@@ -218,6 +216,8 @@ def fix_album_covers(album, embed=True, use_embedded=True, on_track=None):
         for f in folders:
             img = folder_img.get(f) or folder_img.get(root) or album_img
             for fl in _flacs_in(f):
+                if not formats.can_embed(fl):
+                    continue
                 embed_into(fl, img, 'image/jpeg')
                 embedded += 1
                 if on_track:

@@ -102,11 +102,11 @@ def test_new_file_checks(client, tmp_path, flac_bytes):
         add_flac(root / f'0{i}.flac', flac_bytes)
         tags.write(str(root / f'0{i}.flac'), [('TITLE', 'CafÃ©'), ('ALBUM', 'Al'), ('ARTIST', 'A'), ('TRACKNUMBER', str(i)),
                                                ('ALBUMARTIST', 'A' if i == 1 else 'B'), ('album_artist', 'A')])
-    (root / '._01.flac').write_bytes(b'junk'); (root / 'Thumbs.db').write_bytes(b'x'); (root / '03.mp3').write_bytes(b'x')
+    (root / '._01.flac').write_bytes(b'junk'); (root / 'Thumbs.db').write_bytes(b'x'); (root / '03.tak').write_bytes(b'x')
     res = check.check_album({'name': 'Al', 'path': str(root), 'disc_info': [{'path': str(root)}]})
     codes = {i['code'] for i in res['issues']} | {i['code'] for f in res['files'] for i in f['issues']}
     assert {'mojibake', 'tag_spellings', 'albumartist_mismatch', 'junk_files', 'other_audio'} <= codes
-    assert len([f for f in res['files'] if f['kind'] == 'flac']) == 2      # ._01.flac is not a track
+    assert len([f for f in res['files'] if f['kind'] == 'track']) == 2      # ._01.flac is not a track
 
 def test_musicbrainz_ranking_prefers_edition_hint(monkeypatch):
     rel = lambda i, date, dis='': {'id': str(i), 'title': 'Dummy', 'date': date, 'disambiguation': dis, 'score': 100 - i,

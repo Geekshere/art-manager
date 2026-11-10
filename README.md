@@ -1,7 +1,9 @@
 # Art Manager
 
-A small local web tool for curating the artwork in a FLAC music library:
-artist images, `cover.jpg` files, and the picture embedded in every track.
+A small local web tool for curating the artwork and tags in a music library
+(FLAC, MP3, M4A/AAC/ALAC, Ogg Vorbis, Opus, WavPack, Monkey's Audio, Musepack,
+WAV, AIFF, DSF, WMA): artist images, `cover.jpg` files, the picture embedded in
+every track, and clean, consistent tags.
 The library can be a local folder, an SMB share or a WebDAV server (Nextcloud,
 ownCloud, most NAS boxes) — no drive mapping needed.
 
@@ -37,14 +39,15 @@ It only ever touches artwork — never tags, genres or filenames.
   `album_artist`, `ALBUM ARTIST` → one `ALBUMARTIST`), removes duplicate and
   empty values, trims spaces and repairs garbled text (`CafÃ©` → `Café`) —
   one album or the whole library at once
-- **Check Files:** finds FLAC files that are cut off or damaged, odd tags (the
+- **Check Files:** finds music files that are cut off or damaged (FLAC frame
+  CRCs, MP3 frames, Ogg page CRCs, M4A boxes, WAV/AIFF sizes), odd tags (the
   same field under several names, duplicates, conflicting values, garbled
   text, bad track numbers or dates), albums split by inconsistent album
   artists, missing disc numbers, mislabelled or tiny embedded pictures, junk
-  files (`._*`, `Thumbs.db`), MP3s mixed in with FLACs, low-resolution covers
+  files (`._*`, `Thumbs.db`), the same track in two formats, low bitrates, low-resolution covers
   and more. It reads only the start and end of each file (about 2,000 files a
   second on a local disk) and remembers results. Optional full decode with
-  the `flac` program
+  `flac` or `ffmpeg`
 - Fast: a 1,500-artist / 90,000-track library scans in under a second locally;
   **Update Library** only re-reads folders that changed (**↺ Full rescan**
   re-reads everything)

@@ -1,7 +1,7 @@
 """
 Library scanning.
 
-Layout understood:  root / Artist / Album / *.flac
+Layout understood:  root / Artist / Album / *.flac (or .mp3, .m4a, .ogg, .opus, ...)
                     root / Artist / Album / Disc / *.flac   (multi-disc)
 
 Incremental scan. Each artist in the cache records the fingerprints (ETag or
@@ -42,7 +42,7 @@ OTHER_ARTIST_IMAGES = ('artist.jpg', 'artist.jpeg', 'artist.png', 'folder.jpg', 
 
 # Bump when the meaning of cached fields changes: an older cache is then
 # ignored once and the library fully rescanned.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 def cover_name():
     return (cfg.get('cover_name') or 'cover.jpg').lower()
@@ -51,7 +51,7 @@ def artist_image_name():
     return (cfg.get('artist_image_name') or 'artist.jpg').lower()
 
 def is_junk_file(name):
-    """macOS '._' metadata files end in .flac too, but are not tracks."""
+    """macOS '._' metadata files end in .flac / .mp3 too, but are not tracks."""
     return name.startswith('._')
 
 LISTDIR_RETRY_DELAYS = (0.3, 1.0)
@@ -118,7 +118,8 @@ def _any_artist_image(dir_path, files):
     return _first_of(dir_path, files, OTHER_ARTIST_IMAGES, artist_image_name())
 
 def is_track(name):
-    return name.lower().endswith('.flac') and not is_junk_file(name)
+    from .formats import is_audio
+    return is_audio(name) and not is_junk_file(name)
 
 def _flac_count(files):
     return sum(1 for f in files if is_track(f))

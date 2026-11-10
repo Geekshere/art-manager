@@ -227,12 +227,13 @@ def group_tags(group_id, local_names=()):
         'ORIGINALDATE': [str(g.get('year'))] if g.get('year') else [],
         'RELEASETYPE': [(RELEASE_TYPES.get(rt, '') if isinstance(rt, int) else str(rt or '')).lower()],
     }
-    local = {n.lower() for n in local_names if n.lower().endswith('.flac')}
+    from .formats import is_audio
+    local = {n.lower() for n in local_names if is_audio(n)}
     editions = {}
     for t in torrents:
         key = (t.get('remasterTitle') or '', t.get('remasterYear') or 0, t.get('remasterRecordLabel') or '',
                t.get('remasterCatalogueNumber') or '', t.get('media') or '')
-        names = {n for n in _file_names(t.get('fileList')) if n.endswith('.flac')}
+        names = {n for n in _file_names(t.get('fileList')) if is_audio(n)}
         score = (len(local & names) / max(len(local), len(names))) if local and names else 0.0
         e = editions.setdefault(key, {'score': 0.0, 'formats': set()})
         e['score'] = max(e['score'], score)
