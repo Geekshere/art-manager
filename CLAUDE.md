@@ -53,7 +53,9 @@ art_manager/
   search.py                image sources + Provider registry + run_providers()
   check.py                 fast FLAC/cover health check (no decoding), cached, library jobs
   updater.py               self-update of the standalone app from GitHub Releases
-  redacted.py              Redacted API source (rate limiter, image-host proxy)
+  redacted.py              Redacted API source (rate limiter, image-host proxy) + edition lookup
+  tags.py                  Vorbis tags: raw read, canonical names, normalize, problems, write, backup/undo
+  musicbrainz.py           MusicBrainz release search + Picard-style tag mapping (1 req/s)
   server.py                Flask routes, path confinement, auth, embed jobs (SSE), CLI main()
   templates/index.html     the whole frontend: one SPA, vanilla JS, no build step
 packaging/                 PyInstaller spec + release notes for the standalone apps
@@ -216,6 +218,31 @@ calls. Album covers: `browse` (artistname + groupname) → `cover`, else up to 3
 are served via `/api/image/redacted?path=…` because they need `imgauth`
 credentials (password-equivalent) — never put those in a URL the browser sees.
 
+### Library types / naming
+
+`cfg['library_type']` (navidrome | plex | jellyfin | custom) sets `cover_name`,
+`artist_image_name`, `disc_covers`, `embed_art` (`config.LIBRARY_PRESETS`).
+Everything that decides or writes covers reads these — never hard-code
+`cover.jpg`. `config.naming_key()` is stored in the scan cache; a change makes
+`/api/library` return `{}` and the next scan a full one. The UI shows names via
+`CN()` / `AN()` and `.cn` / `.an` spans.
+
+### Tags
+
+`tags.read_raw()` parses the VORBIS_COMMENT block itself (no picture loading).
+`canonical()` maps every spelling to one upper-case name (squash spaces/_/-,
+plus aliases); `normalize()` merges variants, dedupes case-insensitively,
+trims, repairs mojibake, and for `SINGLE` fields keeps the canonical spelling's
+value. `write()` uses the raw list (`del audio.tags[:]` + append) because
+mutagen's dict setters merge keys case-insensitively — that would make undo of
+"ALBUMARTIST + album_artist" impossible. `apply()` always backs up first
+(`<data dir>/tag_backups/*.json`, last 200). The editor (`#v-tags`) computes the
+complete new tags per track client-side (`tgCompute`) from: tidied current tags
++ ticked lookup fields + edition note + manual set/remove; the server only
+validates and writes. Track pairing: `server.map_tracks`. Edition notes go to
+`MUSICBRAINZ_ALBUMCOMMENT` (Picard's field); a note from the folder name wins
+over a release's disambiguation.
+
 ### Server safety
 
 Binds 127.0.0.1 by default; when loopback-only, requests with a non-loopback
@@ -274,7 +301,11 @@ reintroduce a server-side "re-check" pass.
     `_fix_child_env()` restores the original value.
 15. **Defaults stored in `cfg` hide old files' versions:** `load_cfg()` marks a
     settings file without `settings_version` as version 1 before migrating.
-16. **smbd in tests:** on shutdown it SIGTERMs its whole process group. Start it
+16. **mutagen VCommentDict setters are case-insensitive** — write tags through
+    the raw list (see Tags) or you lose spellings you meant to keep.
+17. **`list.index()` on dicts compares by value** — two identical tracks got the
+    same slot in track pairing; count positions instead.
+18. **smbd in tests:** on shutdown it SIGTERMs its whole process group. Start it
     with `start_new_session=True` **and** `--no-process-group`, or it kills
     pytest (and without `--no-process-group` it fails to `setsid`).
 

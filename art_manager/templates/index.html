@@ -571,6 +571,7 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
     <h3>Changes <span class="note" id="tg-change-count"></span></h3>
     <div class="tg-box">
         <label class="note" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="tg-only-empty" onchange="tgRender()"> only fill fields that are empty now</label>
+        <label class="note" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="tg-ascii" onchange="store('tagAscii',this.checked);tgRender()"> plain punctuation from look-ups (’ “ ” … – → ' " " ... -)</label>
         <div id="tg-diff"></div>
         <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
             <button class="primary" id="tg-save" onclick="tgSave()">Save</button>
@@ -1884,6 +1885,7 @@ async function openTags(){
     const artist=lib.artists[curAI], al=artist.albums[curALI];
     tg={album:al, artist, data:null, props:null, source:null, fieldsOn:{}, tracksOn:{}, set:{}, remove:[], gen:stepGen};
     setEl('tg-title',artist.name+' — '+al.name);
+    document.getElementById('tg-ascii').checked=!!recall('tagAscii',false);
     setVal('tg-q-artist',artist.name); setVal('tg-q-album',al.name.replace(/\s*[\(\[\{][^\)\]\}]*[\)\]\}]/g,'').trim()||al.name);
     document.getElementById('tg-source').value='musicbrainz';
     ['tg-results','tg-editions','tg-release-note','tg-search-status','tg-save-status'].forEach(id=>document.getElementById(id).innerHTML='');
@@ -2002,8 +2004,11 @@ function tgReset(){ tg.props=null; tg.set={}; tg.remove=[]; tg.cleanupOnly=false
 document.addEventListener('input',e=>{ if(e.target&&e.target.id==='tg-edition'&&tg) tg.editionTouched=true; });
 
 // The complete new tags for every track, from: current tags (tidied) + chosen lookup fields + edition + manual changes
+const TG_ASCII={'\u2018':"'",'\u2019':"'",'\u201A':"'",'\u201C':'"','\u201D':'"','\u201E':'"','\u2026':'...','\u2010':'-','\u2011':'-','\u2012':'-','\u2013':'-','\u2014':'-','\u2032':"'",'\u00A0':' '};
+const tgAscii=v=>v.map(x=>x.replace(/[\u2018\u2019\u201A\u201C\u201D\u201E\u2026\u2010-\u2014\u2032\u00A0]/g,c=>TG_ASCII[c]));
 function tgCompute(){
     const onlyEmpty=document.getElementById('tg-only-empty').checked;
+    const ascii=document.getElementById('tg-ascii').checked;
     const ed=val('tg-edition');
     return tg.data.tracks.map(t=>{
         const cur=t.tags||{}, out=JSON.parse(JSON.stringify(cur)), from={};
@@ -2013,7 +2018,7 @@ function tgCompute(){
                 if(!v||!v.length) return;
                 if(tg.fieldsOn[f]===false) return;
                 if(onlyEmpty && cur[f] && cur[f].length) return;
-                out[f]=v; from[f]=true;
+                out[f]=ascii?tgAscii(v):v; from[f]=true;
             });
         }
         if(use && ed){

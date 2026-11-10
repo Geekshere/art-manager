@@ -21,12 +21,30 @@ It only ever touches artwork — never tags, genres or filenames.
 - **Missing report with quick fixes:** one click gives every album and disc
   folder a `cover.jpg` from art that is already there (`folder.jpg`, CD 1's
   cover, the art embedded in the tracks) — never replacing an existing one
-- **Check Files:** finds FLAC files that are cut off or damaged, files missing
-  title/artist/album/track-number tags or an embedded cover, unreadable or
-  low-resolution `cover.jpg` files, duplicate track numbers and more. It reads
-  only the start and end of each file (about 2,000 files a second on a local
-  disk) and remembers results, so a re-check only reads files that changed.
-  Optional full decode if the `flac` program is installed
+- **Works with your player:** pick Navidrome, Plex/Plexamp or Jellyfin and the
+  right file names are used (`cover.jpg` / `folder.jpg`, artist image, covers
+  in disc folders or not, embed or not) — or choose your own
+- **Tag editor:** look an album up on **MusicBrainz** (track titles, numbers,
+  dates, label, catalogue number, MusicBrainz IDs — same field names as Picard)
+  or **Redacted** (label, catalogue number, year and the exact *edition*, picked
+  by matching its file list to your files). A before/after table lets you tick
+  exactly which changes to apply; every save can be undone
+- **Editions:** when you have several versions of an album (e.g. a 2013
+  remaster), an edition note is suggested from the folder name and written to
+  the edition/version field (and optionally the comment or album title), so
+  players keep them apart
+- **Tag clean-up:** merges fields written several ways (`ALBUMARTIST`,
+  `album_artist`, `ALBUM ARTIST` → one `ALBUMARTIST`), removes duplicate and
+  empty values, trims spaces and repairs garbled text (`CafÃ©` → `Café`) —
+  one album or the whole library at once
+- **Check Files:** finds FLAC files that are cut off or damaged, odd tags (the
+  same field under several names, duplicates, conflicting values, garbled
+  text, bad track numbers or dates), albums split by inconsistent album
+  artists, missing disc numbers, mislabelled or tiny embedded pictures, junk
+  files (`._*`, `Thumbs.db`), MP3s mixed in with FLACs, low-resolution covers
+  and more. It reads only the start and end of each file (about 2,000 files a
+  second on a local disk) and remembers results. Optional full decode with
+  the `flac` program
 - Fast: a 1,500-artist / 90,000-track library scans in under a second locally;
   **Update Library** only re-reads folders that changed (**↺ Full rescan**
   re-reads everything)
@@ -134,6 +152,19 @@ python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\ac
 pip install -r requirements-dev.txt
 python app.py
 ```
+
+## Library types
+
+| Player | Album cover | Artist image | Cover in disc folders | Embedded |
+|---|---|---|---|---|
+| Navidrome | `cover.jpg` | `artist.jpg` | yes | yes |
+| Plex / Plexamp | `cover.jpg` | `artist.jpg` | no | yes |
+| Jellyfin | `folder.jpg` | `folder.jpg` | no | yes |
+| Other | you choose (`.jpg` or `.png`) | you choose | you choose | you choose |
+
+Set on first start and under **Settings → Library type & file names**. Only
+the configured file name counts as "has a cover"; other images (`folder.jpg`,
+`cover.png`, …) are shown and can be turned into it with one click.
 
 ## Library layout
 

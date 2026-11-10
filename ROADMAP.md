@@ -238,8 +238,14 @@ the URL.
 - Quick fixes for missing cover.jpg, keyboard shortcuts, Quit button.
 - Speed work (see CLAUDE.md → Speed).
 - Self-update for the standalone app; Redacted as an image source.
+- Library types (Navidrome / Plex / Jellyfin / custom naming); tag editor with
+  MusicBrainz + Redacted, editions, clean-up and undo; many more file checks.
 
 ## Ideas (not scheduled)
+
+- Optional AI assistant (own API key) to choose the best cover and resolve
+  ambiguous tag matches using the context of the library.
+- AcoustID fingerprint matching for albums MusicBrainz search can't find.
 
 - A keyed web-image provider (e.g. Brave Search API) for people who want
   something sturdier than the unofficial DuckDuckGo/Bing endpoints.
