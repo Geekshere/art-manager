@@ -1,5 +1,5 @@
 """Runs tests/ui/ui_tests.js (Playwright, Node) against a live server on a fixture library."""
-import os, shutil, socket, subprocess, sys, time, urllib.request
+import os, shutil, signal, socket, subprocess, sys, time, urllib.request
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -41,7 +41,20 @@ def test_browser(server, tmp_path):
     from conftest import PNG_1PX
     png = tmp_path / 'upload.png'
     png.write_bytes(PNG_1PX)
-    r = subprocess.run(['node', os.path.join(HERE, 'ui', 'ui_tests.js'), server, str(png)],
-                       capture_output=True, text=True, timeout=180)
-    print(r.stdout, r.stderr)
-    assert r.returncode == 0, r.stdout + r.stderr
+    # Own process group: on a timeout, kill node AND the Chrome it started.
+    # (subprocess.run's timeout only kills node; Chrome keeps the output pipe
+    # open and the test would then hang forever instead of failing.)
+    proc = subprocess.Popen(['node', os.path.join(HERE, 'ui', 'ui_tests.js'), server, str(png)],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            start_new_session=(os.name != 'nt'))
+    try:
+        out, _ = proc.communicate(timeout=300)
+    except subprocess.TimeoutExpired:
+        if os.name != 'nt':
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+        out, _ = proc.communicate()
+        out += '\nTIMED OUT after 300 s'
+    print(out)
+    assert proc.returncode == 0, out

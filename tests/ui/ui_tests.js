@@ -54,6 +54,7 @@ const gridLabels = (page, id) => page.$$eval(`#${id} .img-cell img`, els => els.
   const errors = [];
   const newPage = async () => {
     const p = await browser.newPage();
+    p.setDefaultTimeout(10000);   // a failing wait reports quickly instead of after 30 s
     p.on('pageerror', e => errors.push(e.message));
     return p;
   };
