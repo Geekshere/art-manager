@@ -60,6 +60,15 @@ jobs:
       - name: Zip (macOS keeps the executable bit)
         if: runner.os == 'macOS'
         run: cd out && zip ${{ matrix.file }}.zip ${{ matrix.file }} && rm ${{ matrix.file }}
+      - name: Self-update test (an older build updates itself to this one)
+        run: |
+          VERSION=$(python -c "import re;print(re.search(r\"__version__ = .([0-9.]+).\", open('art_manager/__init__.py').read()).group(1))")
+          mkdir -p old-src && cp -r app.py art_manager packaging pyproject.toml README.md LICENSE old-src/
+          sed -i.bak "s/__version__ = '[0-9.]*'/__version__ = '0.0.1'/" old-src/art_manager/__init__.py
+          (cd old-src && pyinstaller --noconfirm --log-level WARN --distpath ../dist-old --workpath ../build-old packaging/art-manager.spec)
+          OLD=dist-old/art-manager; [ -f dist-old/art-manager.exe ] && OLD=dist-old/art-manager.exe
+          ASSET=out/${{ matrix.file }}; [ -f "$ASSET.zip" ] && ASSET="$ASSET.zip"
+          python packaging/test_update.py "$OLD" "$ASSET" "$VERSION"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}

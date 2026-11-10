@@ -4,7 +4,7 @@ import subprocess, sys, threading, time, traceback, urllib.request, uuid, webbro
 
 from flask import Flask, Response, jsonify, render_template, request
 
-from . import __version__, check, config, storage
+from . import __version__, check, config, storage, updater
 from .artwork import (collect_album_flacs, decode_uploaded_image, dl_image, embed_into,
                       find_album_embedded, fix_album_covers, read_flac, to_data_url, to_jpeg,
                       write_artist_img, write_covers)
@@ -163,6 +163,59 @@ def api_ping():
     """Lets a second launch find this one (and open the browser instead of starting again)."""
     return jsonify({'app': 'art-manager', 'version': __version__})
 
+@app.route('/api/update', methods=['GET'])
+def api_update_status():
+    return jsonify(updater.public_state())
+
+@app.route('/api/update/check', methods=['POST'])
+def api_update_check():
+    if not request.is_json:
+        return jsonify({'error': 'JSON required'}), 400
+    return jsonify(updater.check())
+
+@app.route('/api/update/install', methods=['POST'])
+def api_update_install():
+    """Download (if needed), verify, swap the program and restart. The page reloads itself."""
+    if not request.is_json:
+        return jsonify({'error': 'JSON required'}), 400
+    st = updater.public_state()
+    if not st['can_self_update']:
+        return jsonify({'error': st['how_to_update'] or 'No standalone app for this computer'}), 400
+    if not st['writable']:
+        return jsonify({'error': f"Can't replace {st['program']}: its folder is read-only. Move the app to "
+                                 f"a folder you can write to (e.g. your home folder) or download the new "
+                                 f"version manually."}), 400
+    if not st['available'] and not updater.staged_update():
+        return jsonify({'error': 'Already up to date'}), 400
+
+    def run():
+        try:
+            staged = updater.staged_update() or updater.download()
+            time.sleep(0.8)   # let the browser receive the "restarting" status
+            updater.apply(staged, _restart_args(after_update=True))
+        except Exception as e:
+            log.warning('update install failed: %r', e)
+            with updater._lock:
+                updater.state.update(status='error', error=f'Update failed: {e}')
+    threading.Thread(target=run, daemon=True, name='update').start()
+    return jsonify({'ok': True})
+
+def _restart_args(after_update):
+    """Command line for the updated program: the same arguments, plus where we came from."""
+    args, skip = [], False
+    for a in sys.argv[1:]:
+        if skip:
+            skip = False; continue
+        if a in ('--updated-from',):
+            skip = True; continue
+        if a in ('--after-update', '--no-browser', '--open'):
+            continue
+        args.append(a)
+    args += ['--updated-from', __version__]
+    if after_update:
+        args += ['--after-update', '--no-browser']   # the open tab reloads itself
+    return args
+
 @app.route('/api/quit', methods=['POST'])
 def api_quit():
     # JSON only: a plain cross-site form post can't trigger it.
@@ -191,6 +244,9 @@ def api_config():
         _verified.clear()
         if 'allow_network' in d:
             cfg['allow_network'] = bool(d['allow_network'])
+        for k in ('update_check', 'update_auto_install'):
+            if k in d:
+                cfg[k] = bool(d[k])
         if 'port' in d:
             try:
                 p = int(d['port'])
@@ -217,6 +273,8 @@ def api_config():
 def _public():
     out = public_cfg()
     out['settings_file'] = config.CFG_FILE
+    out['version'] = __version__
+    out['updated_from'] = _running.get('updated_from')
     out['running'] = {'network': not _auth['loopback_only'], 'port': _running['port'],
                       'password_from_cli': bool(_auth['password'])}
     return out
@@ -606,6 +664,10 @@ def _free_port(host, start):
     """The first port from `start` on that we can listen on (macOS uses 5000 for AirPlay)."""
     for port in range(start, start + 50):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if os.name != 'nt':
+                # like the server itself: connections lingering in TIME_WAIT after
+                # a restart must not make the port look taken
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 s.bind((host, port))
                 return port
@@ -650,7 +712,10 @@ def prepare(argv=None):
     parser.add_argument('--no-browser', dest='open_browser', action='store_false',
                         help="Don't open the browser")
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
+    parser.add_argument('--updated-from', default=None, help=argparse.SUPPRESS)
+    parser.add_argument('--after-update', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    _running['updated_from'] = args.updated_from
 
     # Anything given on the command line is remembered, so it only has to be given once.
     given = {'library_root': args.library, 'fanart_key': args.fanart,
@@ -669,6 +734,12 @@ def prepare(argv=None):
         except (ValueError, argparse.ArgumentTypeError):
             print(f"  Ignoring ARTMGR_PORT={os.environ['ARTMGR_PORT']!r}: not a port number (1-65535)")
     wanted = args.port or env_port or int(cfg.get('port') or 5000)
+    if args.after_update:
+        # Started by an update of the running app: wait for the old one to let go of the port.
+        for _ in range(200):
+            if not _art_manager_at(wanted):
+                break
+            time.sleep(0.1)
     port = _free_port(host, wanted)
 
     _auth['password'] = args.password or os.environ.get('ARTMGR_PASSWORD') or None
@@ -788,9 +859,31 @@ def main(argv=None):
         _pause_before_exit()
         sys.exit(1)
 
+def _install_staged_update():
+    """Standalone app: an update downloaded earlier is installed before starting."""
+    if updater.install_kind() != 'app':
+        return
+    staged = updater.staged_update()
+    if staged and cfg.get('update_auto_install', True) and updater.can_replace_program():
+        print(f"\nInstalling the update that was downloaded ({os.path.basename(staged)})…", flush=True)
+        try:
+            updater.apply(staged, _restart_args(after_update=False))
+        except Exception as e:
+            log.warning('installing the staged update failed: %r', e)
+            print(f"  Couldn't install it ({e}); starting the current version.", flush=True)
+
 def _main(argv):
+    load_cfg()
+    args_seen = argv or sys.argv[1:]
+    if updater.install_kind() == 'app' and not any(a in ('--version', '-h', '--help') for a in args_seen):
+        updater.cleanup()   # leftovers from an earlier update (also right after one)
+    if not any(a in ('--after-update', '--version', '-h', '--help') for a in args_seen):
+        _install_staged_update()
     host, port, wanted, want_browser = prepare(argv)
     frozen = getattr(sys, 'frozen', False)
+    if _running.get('updated_from'):
+        print(f"\n  Updated from {_running['updated_from']} to {__version__}. Your settings are unchanged.")
+    threading.Thread(target=updater.background, daemon=True, name='update-check').start()
 
     # Double-clicked again while it's already running: just show it.
     if port != wanted and _art_manager_at(wanted):

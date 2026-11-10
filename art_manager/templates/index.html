@@ -128,6 +128,19 @@ h3 { font-size:12px; font-weight:700; color:#555; text-transform:uppercase; lett
 @keyframes spin { to { transform:rotate(360deg); } }
 .hidden { display:none !important; }
 
+/* Skipped-folders popup */
+.pop-wrap { position:relative; }
+.pop-wrap .pop { display:none; position:absolute; top:100%; left:0; margin-top:4px; z-index:50; background:#fff; border:1px solid #bbb;
+                 border-radius:4px; box-shadow:0 4px 14px rgba(0,0,0,.18); padding:8px 10px; min-width:240px; max-width:420px;
+                 max-height:320px; overflow:auto; font-size:12px; color:#222; white-space:normal; }
+.pop-wrap:hover .pop, .pop-wrap.open .pop { display:block; }
+.pop li { margin:2px 0 2px 16px; font-family:ui-monospace,monospace; font-size:11px; }
+
+/* Update banner */
+#upd-bar { background:#eef6ff; border-bottom:1px solid #9cc3ef; padding:7px 14px; font-size:12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+#upd-overlay { position:fixed; inset:0; background:rgba(255,255,255,.92); z-index:20000; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px; font-size:14px; }
+#toast { position:fixed; bottom:16px; right:16px; background:#1a6f1a; color:#fff; padding:10px 14px; border-radius:4px; font-size:13px; z-index:20001; box-shadow:0 4px 14px rgba(0,0,0,.2); }
+
 /* Setup screen */
 .src-tiles { display:flex; gap:10px; flex-wrap:wrap; margin:12px 0 16px; }
 .tile { display:flex; flex-direction:column; align-items:flex-start; gap:3px; width:220px; padding:12px 14px; text-align:left; background:#fff; border:2px solid #ccc; border-radius:6px; }
@@ -157,13 +170,27 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
     <span id="hdr-scanned"></span>
     <button id="hdr-update-btn" onclick="doScan(false)" title="Re-read the folders that changed since the last scan">⟳ Update Library</button>
     <span id="hdr-msg"></span>
-    <span id="hdr-skipped" class="note hidden" style="font-size:11px;cursor:help"></span>
+    <span id="hdr-skipped-wrap" class="pop-wrap hidden" onclick="this.classList.toggle('open')">
+        <span id="hdr-skipped" class="note" style="font-size:11px;cursor:help;text-decoration:underline dotted"></span>
+        <div class="pop" id="hdr-skipped-pop"></div>
+    </span>
     <a id="hdr-errors" href="#" class="warn hidden" style="font-size:11px" onclick="toggleScanErrors();return false"></a>
     <button onclick="showV('v-settings')">Settings</button>
     <button onclick="showMissing()">Missing Report</button>
     <button onclick="showCheck()" title="Find damaged FLAC files, missing tags and bad covers">Check Files</button>
     <button onclick="quitApp()" title="Stop Art Manager">⏻ Quit</button>
 </div>
+
+<div id="upd-bar" class="hidden">
+    <span id="upd-text"></span>
+    <a href="#" id="upd-notes-link" onclick="document.getElementById('upd-notes').classList.toggle('hidden');return false">What's new</a>
+    <button class="primary" id="upd-btn" onclick="installUpdate()">Update now</button>
+    <button onclick="dismissUpdate()" title="Hide until the next version">Later</button>
+    <pre id="upd-notes" class="hidden" style="flex-basis:100%;white-space:pre-wrap;font-family:inherit;font-size:12px;margin:4px 0 0;max-height:220px;overflow:auto;background:#fff;border:1px solid #cfe0f3;padding:8px"></pre>
+</div>
+<div id="upd-overlay" class="hidden"><div class="spinner" style="width:22px;height:22px"></div><div id="upd-overlay-text">Updating…</div>
+    <div class="note">Your settings are kept. This page reloads by itself.</div></div>
+<div id="toast" class="hidden"></div>
 
 <div id="scan-errors" class="hidden" style="background:#fff8e5;border-bottom:1px solid #e0c060;padding:8px 14px;font-size:12px">
     <div style="display:flex;gap:10px;align-items:center;margin-bottom:4px">
@@ -421,6 +448,12 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
         </div>
     </div>
     <p class="note" style="max-width:600px;margin:-4px 0 8px 138px">Folder names skipped at every level (artists, albums, discs). Case-insensitive; <code>*</code> and <code>?</code> wildcards allowed. Takes effect immediately; folders removed from this list reappear after <strong>Update Library</strong>.</p>
+    <hr class="sep">
+    <h3>Updates</h3>
+    <div class="cfg-row"><label>Version</label><span id="upd-version"></span><button id="upd-check-btn" onclick="checkUpdate(true)">Check now</button><button id="upd-install-btn" class="primary hidden" onclick="installUpdate()">Update now</button></div>
+    <div class="cfg-row"><label></label><label style="min-width:0;display:flex;gap:6px;align-items:center;color:#333"><input type="checkbox" id="cfg-upd-check" onchange="saveUpdatePrefs()"> check for new versions automatically</label></div>
+    <div class="cfg-row" id="upd-auto-row"><label></label><label style="min-width:0;display:flex;gap:6px;align-items:center;color:#333"><input type="checkbox" id="cfg-upd-auto" onchange="saveUpdatePrefs()"> download them automatically and install at the next start</label></div>
+    <p id="upd-status" class="note" style="max-width:620px;margin:0 0 8px 138px"></p>
     <hr class="sep">
     <h3>Access</h3>
     <div class="cfg-row"><label>Other devices</label><label style="min-width:0;display:flex;gap:6px;align-items:center;color:#333"><input type="checkbox" id="cfg-net"> allow phones and other computers on my network to open Art Manager</label></div>
@@ -758,6 +791,88 @@ async function quitApp(){
     document.body.innerHTML='<div class="page"><h2>Art Manager has stopped.</h2><p class="note">You can close this tab. Start Art Manager again to come back.</p></div>';
 }
 
+// ── Updates ───────────────────────────────────────────────────────────────
+let updState=null;
+function toast(msg,ms){
+    const t=document.getElementById('toast'); t.textContent=msg; t.classList.remove('hidden');
+    setTimeout(()=>t.classList.add('hidden'),ms||5000);
+}
+function renderUpdate(){
+    const u=updState; if(!u) return;
+    setEl('upd-version',u.current+({app:' (standalone app)',pip:' (installed with pip/uv)',source:' (source checkout)',docker:' (Docker)'}[u.kind]||''));
+    document.getElementById('cfg-upd-check').checked=!!u.auto_check;
+    document.getElementById('cfg-upd-auto').checked=!!u.auto_install;
+    document.getElementById('upd-auto-row').classList.toggle('hidden',!u.can_self_update);
+    const ready=u.status==='ready'||!!u.staged;
+    let st='';
+    if(u.status==='checking') st='Checking…';
+    else if(u.status==='downloading') st='Downloading '+u.latest+'… '+u.progress+'%';
+    else if(u.error) st='<span class="warn">'+esc(u.error)+'</span>';
+    else if(u.available) st='Version '+esc(u.latest)+' is available'+(ready?' and downloaded — it installs at the next start, or click Update now.':'.');
+    else if(u.checked_at) st='Up to date (checked '+fmtAgo(u.checked_at)+').';
+    if(u.available && !u.can_self_update && u.how_to_update) st+='<br>'+esc(u.how_to_update);
+    if(u.available && u.can_self_update && !u.writable) st+='<br><span class="warn">The app is in a read-only folder ('+esc(u.program||'')+'), so it can\'t update itself. Move it to a folder you own, or download the new version from the Releases page.</span>';
+    document.getElementById('upd-status').innerHTML=st;
+    const canInstall=u.available&&u.can_self_update&&u.writable;
+    document.getElementById('upd-install-btn').classList.toggle('hidden',!canInstall);
+    // banner
+    const dismissed=recall('updDismissed','');
+    const show=u.available && dismissed!==u.latest;
+    document.getElementById('upd-bar').classList.toggle('hidden',!show);
+    if(show){
+        setEl('upd-text','Art Manager '+u.latest+' is available (you have '+u.current+')'+(ready?' — downloaded and ready.':'.'));
+        document.getElementById('upd-btn').classList.toggle('hidden',!canInstall);
+        setEl('upd-btn',ready?'Restart to update':'Update now');
+        document.getElementById('upd-notes').textContent=(u.notes||'No release notes.')+(u.page?'\n\n'+u.page:'');
+        if(!canInstall && u.how_to_update) setEl('upd-text',document.getElementById('upd-text').textContent+' '+u.how_to_update);
+    }
+}
+async function checkUpdate(force){
+    try{
+        updState=force?await api('/api/update/check',{method:'POST',body:'{}'}):await api('/api/update');
+        renderUpdate();
+        if(updState.status==='downloading'||updState.status==='checking') setTimeout(()=>checkUpdate(false),1500);
+        // the first background check runs a few seconds after start: look again until it has
+        else if(!updState.checked_at && updState.auto_check && (checkUpdate.tries=(checkUpdate.tries||0)+1)<20)
+            setTimeout(()=>checkUpdate(false),3000);
+    }catch(_){}
+}
+async function saveUpdatePrefs(){
+    try{
+        fillCfgForm(await api('/api/config',{method:'POST',body:JSON.stringify({
+            update_check:document.getElementById('cfg-upd-check').checked,
+            update_auto_install:document.getElementById('cfg-upd-auto').checked})}));
+        checkUpdate(false);
+    }catch(_){}
+}
+function dismissUpdate(){ if(updState) store('updDismissed',updState.latest); renderUpdate(); }
+async function installUpdate(){
+    if(embedding){ alert('Wait for the current embedding to finish first.'); return; }
+    const ov=document.getElementById('upd-overlay'), txt=document.getElementById('upd-overlay-text');
+    const target=updState&&updState.latest;
+    ov.classList.remove('hidden'); txt.textContent='Updating to '+target+'…';
+    try{ await api('/api/update/install',{method:'POST',body:'{}'}); }
+    catch(e){ ov.classList.add('hidden'); alert('Update failed: '+e.message); return; }
+    const started=Date.now();
+    const poll=async()=>{
+        let ping=null;
+        try{ const r=await fetch('/api/ping',{cache:'no-store'}); ping=await r.json(); }catch(_){}
+        if(ping&&ping.version===target){ location.reload(); return; }
+        if(!ping){ txt.textContent='Restarting…'; }
+        else{
+            try{
+                const u=await api('/api/update');
+                if(u.status==='downloading') txt.textContent='Downloading '+target+'… '+u.progress+'%';
+                else if(u.status==='installing') txt.textContent='Installing…';
+                else if(u.status==='error'){ ov.classList.add('hidden'); alert(u.error); updState=u; renderUpdate(); return; }
+            }catch(_){}
+        }
+        if(Date.now()-started>5*60*1000){ txt.textContent='This is taking long — reload the page, or restart Art Manager.'; return; }
+        setTimeout(poll,800);
+    };
+    setTimeout(poll,800);
+}
+
 // ── Setup screen ──────────────────────────────────────────────────────────
 let setupKindSel='local';
 function setupKind(k){
@@ -938,10 +1053,13 @@ function renderScanErrors(){
     if(!errs.length) document.getElementById('scan-errors').classList.add('hidden');
 }
 function renderSkipped(){
-    const sk=(lib&&lib.skipped)||[], e=document.getElementById('hdr-skipped');
-    e.classList.toggle('hidden',!sk.length);
-    e.textContent=sk.length+' folder'+(sk.length===1?'':'s')+' without albums skipped';
-    e.title='Top-level folders with no FLAC albums inside are not shown:\n'+sk.join('\n');
+    const sk=(lib&&lib.skipped)||[];
+    document.getElementById('hdr-skipped-wrap').classList.toggle('hidden',!sk.length);
+    setEl('hdr-skipped',sk.length+' folder'+(sk.length===1?'':'s')+' without albums skipped');
+    document.getElementById('hdr-skipped-pop').innerHTML=
+        '<div>These top-level folders have no FLAC albums inside, so they are not listed as artists:</div>'+
+        '<ul>'+sk.map(n=>'<li>'+esc(n)+'</li>').join('')+'</ul>'+
+        '<div class="note">Folders on the ignore list (Settings) are left out without being counted here.</div>';
 }
 function toggleScanErrors(){ document.getElementById('scan-errors').classList.toggle('hidden'); }
 
@@ -1735,6 +1853,11 @@ document.addEventListener('keydown',e=>{
 // ── Boot ───────────────────────────────────────────────────────────────────
 (async()=>{
     await loadCfg();
+    if(clientCfg.updated_from && sessionStorage.getItem('updToast')!==clientCfg.version){
+        toast('Updated from '+clientCfg.updated_from+' to '+clientCfg.version+' ✓ — your settings are unchanged', 7000);
+        try{ sessionStorage.setItem('updToast',clientCfg.version); }catch(_){}
+    }
+    checkUpdate(false); setInterval(()=>checkUpdate(false), 30*60*1000);
     // Use server-side cache first — avoids rescan on page refresh
     try{
         const cached=await api('/api/library');

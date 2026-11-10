@@ -51,6 +51,8 @@ DEFAULTS = {
     'allow_network': False,    # False = this computer only (127.0.0.1)
     'port': 5000,
     'app_password_hash': '',   # PBKDF2 hash of the optional app password; never the password itself
+    'update_check': True,        # look for new versions on GitHub every few hours
+    'update_auto_install': True, # standalone app: download them and install at the next start
     'settings_version': 2,     # bumped when a migration in _migrate() must run once
 }
 cfg = dict(DEFAULTS)   # the one live settings dict; mutate it, never rebind it
