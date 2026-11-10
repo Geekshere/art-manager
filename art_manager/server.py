@@ -117,6 +117,25 @@ def _require_password():
     return Response('Password required', 401, {'WWW-Authenticate': 'Basic realm="Art Manager"'})
 
 @app.after_request
+def _compress(resp):
+    # The library listing can be several MB for a big collection; gzip makes
+    # it ~10x smaller (matters on a phone over Wi-Fi). Only plain JSON bodies:
+    # not images (already compressed) or the embed progress stream.
+    if (resp.direct_passthrough or resp.status_code != 200 or resp.mimetype != 'application/json'
+            or 'gzip' not in request.headers.get('Accept-Encoding', '')
+            or 'Content-Encoding' in resp.headers):
+        return resp
+    data = resp.get_data()
+    if len(data) < 16 * 1024:
+        return resp
+    import gzip
+    resp.set_data(gzip.compress(data, compresslevel=5))
+    resp.headers['Content-Encoding'] = 'gzip'
+    resp.headers['Content-Length'] = str(len(resp.get_data()))
+    resp.vary.add('Accept-Encoding')
+    return resp
+
+@app.after_request
 def _no_store(resp):
     # Images change in place (a new cover.jpg has the same path) and search
     # results must never be replayed from cache for a different step.

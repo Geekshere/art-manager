@@ -54,6 +54,10 @@ class Entry:
 class Storage:
     """Interface. Paths are full strings including any scheme."""
     name = 'local'
+    # How many listings to run at once. Network backends wait on latency, so
+    # parallel requests help; local disks answer in microseconds and Python
+    # threads only add lock contention (8 threads scanned ~9x slower than 1).
+    parallel = 8
 
     def scandir(self, path):           # -> [Entry]   ONE round-trip, raises on error
         raise NotImplementedError
@@ -87,6 +91,7 @@ class Storage:
 
 class LocalStorage(Storage):
     name = 'local'
+    parallel = 1
 
     @staticmethod
     def _p(path):
@@ -459,6 +464,9 @@ def backend_for(path):
     if m and m.group(1).lower() in _schemes:
         return _backends[_schemes[m.group(1).lower()]]
     return _local
+
+def parallelism(path):
+    return backend_for(path).parallel
 
 def kind(path):
     """'local' | 'smb' | 'webdav' (or a registered test scheme)."""

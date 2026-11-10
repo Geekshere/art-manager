@@ -267,3 +267,24 @@ def test_portable_mode_uses_folder_next_to_app(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, 'frozen', True, raising=False)
     monkeypatch.setattr(sys, 'executable', str(tmp_path / 'art-manager.exe'))
     assert config._default_data_dir() == str(portable)
+
+def test_large_library_response_is_gzipped(client, tmp_path):
+    import gzip, json
+    root = tmp_path / 'Big'
+    for a in range(120):
+        d = root / f'Artist {a:03d}' / 'Album'
+        d.mkdir(parents=True)
+        (d / '01.flac').write_bytes(b'')
+    plain = client.get('/api/scan', query_string={'root': str(root)})
+    assert 'Content-Encoding' not in plain.headers           # client didn't ask for gzip
+    r = client.get('/api/library', headers={'Accept-Encoding': 'gzip, deflate'})
+    assert r.headers['Content-Encoding'] == 'gzip' and 'Accept-Encoding' in r.headers['Vary']
+    lib = json.loads(gzip.decompress(r.data))
+    assert len(lib['artists']) == 120
+    assert len(r.data) < len(plain.data) / 4
+
+def test_parallelism_per_backend():
+    from art_manager import storage
+    assert storage.parallelism('/music') == 1                 # local: threads only add contention
+    assert storage.parallelism('smb://nas.local/M') == 8      # network: latency-bound
+    assert storage.parallelism('webdavs://h/M') == 8

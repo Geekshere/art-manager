@@ -129,8 +129,12 @@ def scan_library(root, prev_artists=None, errors=None, skipped=None):
         return result
 
     names = sorted(root_dirs)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(names))) as ex:
-        results = list(ex.map(scan_one, names))
+    workers = min(MAX_WORKERS, storage.parallelism(root), len(names))
+    if workers <= 1:
+        results = [scan_one(n) for n in names]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(scan_one, names))
     out = []
     for name, a in zip(names, results):
         if a is None:

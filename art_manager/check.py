@@ -483,7 +483,7 @@ def check_album(album, deep=False, pool=None):
     except Exception as e:
         return {'issues': [_issue('error', 'unreadable', storage.error_message(e, album['path']))], 'files': []}
     own = pool is None
-    pool = pool or concurrent.futures.ThreadPoolExecutor(max_workers=8)
+    pool = pool or concurrent.futures.ThreadPoolExecutor(max_workers=storage.parallelism(album['path']))
     try:
         results = list(pool.map(lambda t: _run_task(*t, deep), tasks))
     finally:
@@ -519,7 +519,9 @@ class CheckJob:
         found = []
         counts = {'error': 0, 'warn': 0, 'info': 0}
         files_checked = 0
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        # 1 worker for local disks (fastest), 8 for network shares (latency-bound)
+        workers = storage.parallelism(self.lib.get('root') or '')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             for artist, al in self.albums:
                 if self.cancelled:
                     break
