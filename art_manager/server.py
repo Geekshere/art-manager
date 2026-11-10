@@ -465,6 +465,18 @@ def api_local_img():
         return '', 404
     return Response(data, mimetype='image/png' if p.lower().endswith('.png') else 'image/jpeg')
 
+@app.route('/api/image/redacted')
+def api_redacted_image():
+    """An image on Redacted's image host, fetched with credentials that never reach the browser."""
+    from . import redacted
+    try:
+        data, ct = redacted.fetch_site_image(request.args.get('path', ''))
+    except redacted.RedactedError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception:
+        return '', 404
+    return Response(data, mimetype=ct if ct.startswith('image/') else 'image/jpeg')
+
 @app.route('/api/image/embedded')
 def api_embedded():
     album_path = request.args.get('path', '')

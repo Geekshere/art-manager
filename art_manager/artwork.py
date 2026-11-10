@@ -13,6 +13,14 @@ def to_data_url(data, mime):
 
 
 def dl_image(url):
+    if url.startswith('/api/image/redacted'):
+        # an image on Redacted's own host: fetched with credentials that stay on this server
+        from urllib.parse import parse_qs, urlsplit
+        from . import redacted
+        data, ct = redacted.fetch_site_image(parse_qs(urlsplit(url).query).get('path', [''])[0])
+        return data, ct if ct in ('image/jpeg', 'image/png', 'image/webp') else 'image/jpeg'
+    if not url.startswith(('http://', 'https://')):
+        raise ValueError('Not a web address: ' + url[:100])
     r = requests.get(url, timeout=25, headers={'User-Agent': 'Mozilla/5.0'})
     r.raise_for_status()
     ct = r.headers.get('Content-Type', 'image/jpeg').split(';')[0].strip()

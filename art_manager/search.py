@@ -9,6 +9,7 @@ import concurrent.futures, logging, re, time
 
 import requests
 
+from . import redacted
 from .config import cfg
 
 log = logging.getLogger('art_manager.search')
@@ -388,12 +389,16 @@ PROVIDERS = [
     Provider('discogs',   'Discogs',   'album',  _discogs_album,
              enabled=lambda c: bool(c.get('discogs_token')), hint='needs a free personal token'),
     Provider('deezer',    'Deezer',    'album',  _deezer_album),
+    Provider('redacted',  'Redacted',  'album',  redacted.album_covers, phase='slow', timeout=25,
+             enabled=lambda c: bool(c.get('redacted_key')), hint='needs your Redacted API key'),
     Provider('caa',       'CAA',       'album',  _caa_album, phase='slow', timeout=22),
     Provider('web',       'Web',       'album',  _web_album, phase='slow', web=True,
              enabled=lambda c: c.get('web_search', True), timeout=_DDG_TIMEOUT + 4,
              hint='DuckDuckGo + Bing images (unofficial, best effort)'),
     Provider('fanart',    'Fanart.tv', 'artist', _fanart_artist,
              enabled=lambda c: bool(c.get('fanart_key')), hint='needs a free API key'),
+    Provider('redacted',  'Redacted',  'artist', redacted.artist_image, timeout=20,
+             enabled=lambda c: bool(c.get('redacted_key')), hint='needs your Redacted API key'),
     Provider('wikipedia', 'Wikipedia', 'artist', _wikipedia_artist),
     Provider('deezer',    'Deezer',    'artist', _deezer_artist),
     Provider('web',       'Web',       'artist', _web_artist, web=True,

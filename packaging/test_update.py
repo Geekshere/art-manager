@@ -64,17 +64,24 @@ def wait(cond, what, secs=90):
         except Exception:
             pass
         time.sleep(0.5)
-    print(open(os.path.join(work, 'old.log')).read())
+    for name in ('old.log', os.path.join('data', 'art-manager.log')):
+        p = os.path.join(work, name)
+        print(f'--- {name}:\n' + (open(p, errors='replace').read() if os.path.exists(p) else '(missing)'), flush=True)
+    try:
+        print('--- update state:', call('/api/update', timeout=3), flush=True)
+    except Exception as e:
+        print('--- update state: no answer', e, flush=True)
+    print('--- app folder:', os.listdir(app_dir), flush=True)
     sys.exit(f'FAILED: {what}')
 
 wait(lambda: call('/api/ping')['app'] == 'art-manager', 'old version did not start')
 old_version = call('/api/ping')['version']
-print('old version running:', old_version)
+print('old version running:', old_version, flush=True)
 call('/api/config', {'fanart_key': 'keep-me', 'ignored_folders': ['Keep', 'Me'], 'update_auto_install': False})
 st = call('/api/update/check', {})
-print('check:', {k: st[k] for k in ('current', 'latest', 'available', 'can_self_update', 'writable')})
+print('check:', {k: st[k] for k in ('current', 'latest', 'available', 'can_self_update', 'writable')}, flush=True)
 assert st['available'] and st['can_self_update'] and st['writable'], st
-print('install:', call('/api/update/install', {}))
+print('install:', call('/api/update/install', {}), flush=True)
 wait(lambda: call('/api/ping', timeout=3)['version'] == expected, f'did not restart as {expected}', secs=180)
 cfg = call('/api/config')
 assert cfg['has_fanart_key'] and cfg['ignored_folders'] == ['Keep', 'Me'], cfg

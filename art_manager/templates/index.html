@@ -437,7 +437,9 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
     </div>
     <div class="cfg-row"><label>Fanart.tv key</label><input type="password" id="cfg-ft" placeholder="free key at fanart.tv" autocomplete="new-password"><button onclick="saveCfg()">Save</button><button id="cfg-ft-clear" class="hidden" onclick="clearSecret('fanart_key')">Clear</button><a href="https://fanart.tv/get-an-api-key/" target="_blank" rel="noopener">get a free key</a></div>
     <div class="cfg-row"><label>Discogs token</label><input type="password" id="cfg-dc" placeholder="free personal token (discogs.com → Settings → Developers)" autocomplete="new-password"><button onclick="saveCfg()">Save</button><button id="cfg-dc-clear" class="hidden" onclick="clearSecret('discogs_token')">Clear</button><a href="https://www.discogs.com/settings/developers" target="_blank" rel="noopener">get a free token</a></div>
-    <p class="note" style="max-width:600px;margin:-4px 0 8px 138px">Optional extras. iTunes, Deezer, Cover Art Archive, Wikipedia and web search work without any account or key.</p>
+    <div class="cfg-row"><label>Redacted API key</label><input type="password" id="cfg-red" placeholder="your redacted.sh API key" autocomplete="new-password"><button onclick="saveCfg()">Save</button><button id="cfg-red-clear" class="hidden" onclick="clearSecret('redacted_key')">Clear</button><a href="https://redacted.sh/user.php?action=edit" target="_blank" rel="noopener">create a key</a></div>
+    <p class="note" style="max-width:600px;margin:-4px 0 8px 138px">Redacted: in your profile settings → <b>Access Settings</b> → API Keys, create a key with only the <b>Torrent</b> scope. Art Manager uses it to find covers and artist images, stays under Redacted's rate limit, and keeps the key on this computer.</p>
+    <p class="note" style="max-width:600px;margin:-4px 0 8px 138px">All optional. iTunes, Deezer, Cover Art Archive, Wikipedia and web search work without any account or key.</p>
     <div class="cfg-row"><label>Web image search</label><label style="min-width:0;display:flex;gap:6px;align-items:center;color:#333"><input type="checkbox" id="cfg-web" onchange="saveCfg()"> include DuckDuckGo + Bing image results (unofficial, best effort)</label></div>
     <div class="cfg-row" style="align-items:flex-start">
         <label>Ignored folders</label>
@@ -474,6 +476,7 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
         <tr><td style="padding:3px 8px 3px 0;font-weight:700;color:#333;white-space:nowrap">Discogs</td><td>Community high-res scans. Excellent for vinyl, physical releases, non-English music. Discogs only returns images to signed-in API users, so it needs a free personal token (above).</td></tr>
         <tr><td style="padding:3px 8px 3px 0;font-weight:700;color:#333;white-space:nowrap">Wikipedia</td><td>Artist images — no key needed. Good press photos for known artists.</td></tr>
         <tr><td style="padding:3px 8px 3px 0;font-weight:700;color:#333;white-space:nowrap">Fanart.tv</td><td>Best artist photos, typically 1000–1920px. Free API key at fanart.tv.</td></tr>
+        <tr><td style="padding:3px 8px 3px 0;font-weight:700;color:#333;white-space:nowrap">Redacted</td><td>Covers from Redacted's release groups and artist images, with your own API key (Torrent scope). Shown at the front of the results with CAA.</td></tr>
         <tr><td style="padding:3px 8px 3px 0;font-weight:700;color:#333;white-space:nowrap">Web</td><td>General image search via DuckDuckGo and Bing. Neither has an official keyless API — this uses the same unofficial endpoints as their websites, so it may be rate-limited or stop working; it then shows as <em>unavailable</em> and the other sources carry on. Results are filtered for relevance and shown after all other sources.</td></tr>
     </table>
     <p class="note" style="margin-top:8px">CAA and Web load separately (slower): CAA is added to the front of the results, Web to the end. iTunes, Deezer, CAA, Wikipedia and Web need no key.</p>
@@ -672,6 +675,8 @@ function collectCfgBody(){
     if(ft) body.fanart_key=ft;
     const dc=document.getElementById('cfg-dc').value.trim();
     if(dc) body.discogs_token=dc;
+    const rk=document.getElementById('cfg-red').value.trim();
+    if(rk) body.redacted_key=rk;
     if(pw) body.storage_password=pw;
     return body;
 }
@@ -680,6 +685,7 @@ function showSecretState(c){
     [['cfg-pass','cfg-pass-clear',c.has_storage_password,'password'],
      ['cfg-ft','cfg-ft-clear',c.has_fanart_key,'free key at fanart.tv'],
      ['cfg-dc','cfg-dc-clear',c.has_discogs_token,'free personal token (discogs.com → Settings → Developers)'],
+     ['cfg-red','cfg-red-clear',c.has_redacted_key,'your redacted.sh API key'],
      ['cfg-apppw','cfg-apppw-clear',c.has_app_password_hash,'none — anyone who can open the page can use it']].forEach(([inp,clr,has,ph])=>{
         const el=document.getElementById(inp);
         el.value='';

@@ -248,13 +248,19 @@ def apply(staged, restart_args):
     if sys.platform == 'win32':
         old = prog + f'.old-{int(time.time())}'
         os.replace(prog, old)                     # a running .exe can be renamed, not overwritten
+        log.info('moved the running program aside: %s', old)
         try:
             shutil.copy2(staged, prog)
         except Exception:
             os.replace(old, prog)                 # put the working one back
             raise
+        log.info('new program in place, starting: %s %s', prog, restart_args)
         flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0)
-        subprocess.Popen([prog] + restart_args, creationflags=flags, close_fds=True)
+        p = subprocess.Popen([prog] + restart_args, creationflags=flags, close_fds=True)
+        log.info('started the new version (pid %s); this one exits', p.pid)
+        for h in logging.getLogger('art_manager').handlers:
+            try: h.flush()
+            except Exception: pass
         os._exit(0)
     else:
         tmp = prog + '.new'

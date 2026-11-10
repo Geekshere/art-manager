@@ -45,7 +45,7 @@ DEFAULTS = {
     # Credentials for the library's storage backend (SMB or WebDAV). Never put
     # them in the URL; _migrate() moves them out if an old config did.
     'storage_username': '', 'storage_password': '', 'smb_port': 445,
-    'fanart_key': '', 'discogs_token': '', 'web_search': True,
+    'fanart_key': '', 'discogs_token': '', 'redacted_key': '', 'web_search': True,
     'ignored_folders': None,   # None = DEFAULT_IGNORED; stored once edited
     # How the app is reached (take effect on the next start; CLI flags override)
     'allow_network': False,    # False = this computer only (127.0.0.1)
@@ -66,7 +66,7 @@ DEFAULT_IGNORED = ['.[!.]*', '@eaDir', '#recycle', '@Recycle', '$RECYCLE.BIN',
 
 # Never sent to the browser: GET /api/config replaces them with has_<key>
 # flags; POST only overwrites one when a non-empty value is sent.
-SECRET_KEYS = ('storage_password', 'fanart_key', 'discogs_token', 'app_password_hash')
+SECRET_KEYS = ('storage_password', 'fanart_key', 'discogs_token', 'redacted_key', 'app_password_hash')
 
 # Environment variables override config.json and are never written to it.
 ENV_OVERRIDES = {
@@ -77,6 +77,7 @@ ENV_OVERRIDES = {
     'ARTMGR_SMB_PASSWORD':      'storage_password',
     'ARTMGR_FANART_KEY':        'fanart_key',
     'ARTMGR_DISCOGS_TOKEN':     'discogs_token',
+    'ARTMGR_REDACTED_KEY':      'redacted_key',
 }
 _env_cfg = {}   # values that came from the environment
 
