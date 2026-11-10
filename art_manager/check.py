@@ -405,7 +405,7 @@ def album_issues(file_results, album_name):
 import concurrent.futures, json, threading, time, uuid
 
 from . import config
-from .scan import find_cover_jpg, list_dir
+from .scan import find_cover, is_track, list_dir
 
 _cache_lock = threading.Lock()
 _cache = None          # {path: {'size', 'fp', 'result'}}
@@ -447,9 +447,9 @@ def _album_tasks(album):
     for folder in folders:
         files, _ = list_dir(folder)
         for name, e in sorted(files.items()):
-            if name.lower().endswith('.flac'):
+            if is_track(name):
                 tasks.append(('flac', storage.join(folder, name), e))
-        cov = find_cover_jpg(folder, files)
+        cov = find_cover(folder, files)
         if cov:
             tasks.append(('cover', cov, files[storage.basename(cov)]))
     return tasks

@@ -205,7 +205,10 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
 
 <!-- SETUP -->
 <div id="v-setup" class="page">
-    <h2>Where is your music?</h2>
+    <h2>What plays your music?</h2>
+    <p class="note">This decides how covers are named (for example <code>cover.jpg</code> or <code>folder.jpg</code>). You can change it later in Settings.</p>
+    <div id="su-libtype"></div>
+    <h2 style="margin-top:18px">Where is your music?</h2>
     <p class="note">Choose where your artist folders are. Everything you enter here is saved — you only do this once.</p>
     <div class="src-tiles">
         <button class="tile" data-kind="local" onclick="setupKind('local')"><b>This computer</b><span>A folder on this computer, a USB drive, or a drive that is already mapped/mounted</span></button>
@@ -302,7 +305,7 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
         <div>
             <h3>Current</h3>
             <img id="sa-cur" alt="artist image">
-            <div id="sa-none" class="hidden" style="width:190px;height:190px;border:1px dashed #ccc;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:12px">no artist.jpg</div>
+            <div id="sa-none" class="hidden" style="width:190px;height:190px;border:1px dashed #ccc;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:12px">no <span class="an">artist.jpg</span></div>
             <div id="sa-dim" class="note" style="margin-top:3px"></div>
             <div id="sa-saved" class="ok hidden" style="margin-top:6px;font-size:12px"></div>
             <div style="margin-top:10px">
@@ -350,7 +353,7 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
         <div>
             <h3>Current cover</h3>
             <img id="alb-cover-img" alt="cover" style="display:none">
-            <div id="alb-cover-none" style="width:210px;height:210px;border:1px dashed #ccc;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:12px">no cover.jpg</div>
+            <div id="alb-cover-none" style="width:210px;height:210px;border:1px dashed #ccc;display:flex;align-items:center;justify-content:center;color:#bbb;font-size:12px">no <span class="cn">cover.jpg</span></div>
             <div class="cover-info" id="alb-cover-info"></div>
             <div id="alb-disc-covers"></div>
             <hr class="sep">
@@ -362,7 +365,7 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
                 <button id="alb-use-emb-btn" class="hidden" onclick="doEmbed('embedded')">Use embedded as cover &amp; re-embed</button>
             </div>
             <hr class="sep">
-            <button id="alb-keep-btn" class="hidden" onclick="doEmbed('cover_file')">Keep current cover — save as cover.jpg everywhere &amp; embed</button>
+            <button id="alb-keep-btn" class="hidden" onclick="doEmbed('cover_file')">Keep current cover — save as <span class="cn">cover.jpg</span> everywhere<span class="emb-only"> &amp; embed</span></button>
         </div>
 
         <!-- MIDDLE -->
@@ -451,6 +454,11 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
     </div>
     <p class="note" style="max-width:600px;margin:-4px 0 8px 138px">Folder names skipped at every level (artists, albums, discs). Case-insensitive; <code>*</code> and <code>?</code> wildcards allowed. Takes effect immediately; folders removed from this list reappear after <strong>Update Library</strong>.</p>
     <hr class="sep">
+    <h3>Library type &amp; file names</h3>
+    <p class="note" style="max-width:640px">What plays your music decides which file names count as a cover. Changing this rescans the library.</p>
+    <div id="st-libtype"></div>
+    <div class="cfg-row"><label></label><button class="primary" onclick="saveLibType()">Save</button><span id="libtype-status" class="note"></span></div>
+    <hr class="sep">
     <h3>Updates</h3>
     <div class="cfg-row"><label>Version</label><span id="upd-version"></span><button id="upd-check-btn" onclick="checkUpdate(true)">Check now</button><button id="upd-install-btn" class="primary hidden" onclick="installUpdate()">Update now</button></div>
     <div class="cfg-row"><label></label><label style="min-width:0;display:flex;gap:6px;align-items:center;color:#333"><input type="checkbox" id="cfg-upd-check" onchange="saveUpdatePrefs()"> check for new versions automatically</label></div>
@@ -490,7 +498,7 @@ select#jump-to { font-size:12px; padding:3px 6px; border:1px solid #bbb; backgro
     </div>
     <p class="note" style="max-width:760px">Reads only the start and end of each FLAC file — so it is quick even over the network — and finds
         files that are cut off or damaged, missing tags (title, artist, album, track number), tracks without an embedded cover,
-        unreadable or low-resolution <code>cover.jpg</code> files, and albums whose tracks disagree. Files that haven't changed
+        unreadable or low-resolution <code class="cn">cover.jpg</code> files, and albums whose tracks disagree. Files that haven't changed
         since the last check are not read again.</p>
     <div style="display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap">
         <button class="primary" id="chk-start" onclick="startCheck()">Check whole library</button>
@@ -737,6 +745,8 @@ function toggleConnFields(){
 // never writes stale values back.
 function fillCfgForm(c){
     clientCfg=c;
+    applyNamesToPage();
+    if(document.getElementById('v-settings').classList.contains('hidden')||!document.getElementById('st-libtype').innerHTML) renderLibType('st');
     setEl('cfg-file',c.settings_file||'');
     document.getElementById('cfg-root').value=c.library_root||'';
     document.getElementById('cfg-web').checked=c.web_search!==false;
@@ -795,6 +805,68 @@ async function quitApp(){
     if(!confirm('Quit Art Manager?')) return;
     try{ await api('/api/quit',{method:'POST',body:'{}'}); }catch(_){}
     document.body.innerHTML='<div class="page"><h2>Art Manager has stopped.</h2><p class="note">You can close this tab. Start Art Manager again to come back.</p></div>';
+}
+
+// ── Library type / file names ─────────────────────────────────────────────
+function CN(){ return clientCfg.cover_name||'cover.jpg'; }
+function AN(){ return clientCfg.artist_image_name||'artist.jpg'; }
+function applyNamesToPage(){
+    document.querySelectorAll('.cn').forEach(e=>e.textContent=CN());
+    document.querySelectorAll('.an').forEach(e=>e.textContent=AN());
+    document.querySelectorAll('.emb-only').forEach(e=>e.classList.toggle('hidden',clientCfg.embed_art===false));
+}
+// One widget, used on the setup screen (prefix 'su') and in Settings (prefix 'st').
+function libTypeHTML(prefix){
+    const P=clientCfg.library_presets||{};
+    const order=['navidrome','plex','jellyfin','custom'].filter(k=>P[k]).concat(Object.keys(P).filter(k=>!['navidrome','plex','jellyfin','custom'].includes(k)));
+    return '<div class="src-tiles" style="margin:6px 0 8px">'+order.map(k=>
+        '<button class="tile" type="button" data-lt="'+k+'" onclick="pickLibType(\''+prefix+'\',\''+k+'\')"><b>'+esc(P[k].label)+'</b><span>'+esc(P[k].note||'')+'</span></button>').join('')+'</div>'+
+        '<div id="'+prefix+'-names" class="su-panel">'+
+        '<div class="cfg-row"><label>Album cover file</label><input type="text" id="'+prefix+'-cover" style="width:160px"><span class="note">e.g. cover.jpg, folder.jpg, cover.png</span></div>'+
+        '<div class="cfg-row"><label>Artist image file</label><input type="text" id="'+prefix+'-artist" style="width:160px"><span class="note">in each artist folder</span></div>'+
+        '<div class="cfg-row"><label></label><label style="min-width:0;display:flex;gap:6px;align-items:center;color:#333"><input type="checkbox" id="'+prefix+'-disc"> also put the cover in every disc folder (CD 1, CD 2, …)</label></div>'+
+        '<div class="cfg-row"><label></label><label style="min-width:0;display:flex;gap:6px;align-items:center;color:#333"><input type="checkbox" id="'+prefix+'-embed"> also embed the cover into every track</label></div></div>';
+}
+function pickLibType(prefix,k){
+    const P=(clientCfg.library_presets||{})[k]||{};
+    document.querySelectorAll('#'+prefix+'-libtype .tile').forEach(t=>t.classList.toggle('on',t.dataset.lt===k));
+    document.getElementById(prefix+'-libtype').dataset.sel=k;
+    if(k!=='custom'){
+        setVal(prefix+'-cover',P.cover_name); setVal(prefix+'-artist',P.artist_image_name);
+        document.getElementById(prefix+'-disc').checked=!!P.disc_covers;
+        document.getElementById(prefix+'-embed').checked=!!P.embed_art;
+    }
+    document.querySelectorAll('#'+prefix+'-names input').forEach(i=>i.disabled=(k!=='custom'));
+}
+function renderLibType(prefix){
+    const box=document.getElementById(prefix+'-libtype');
+    if(!box) return;
+    box.innerHTML=libTypeHTML(prefix);
+    setVal(prefix+'-cover',CN()); setVal(prefix+'-artist',AN());
+    document.getElementById(prefix+'-disc').checked=clientCfg.disc_covers!==false;
+    document.getElementById(prefix+'-embed').checked=clientCfg.embed_art!==false;
+    pickLibType(prefix,clientCfg.library_type||'navidrome');
+    if(clientCfg.library_type==='custom'){
+        setVal(prefix+'-cover',CN()); setVal(prefix+'-artist',AN());
+        document.getElementById(prefix+'-disc').checked=clientCfg.disc_covers!==false;
+        document.getElementById(prefix+'-embed').checked=clientCfg.embed_art!==false;
+    }
+}
+function libTypeBody(prefix){
+    const k=document.getElementById(prefix+'-libtype').dataset.sel||'navidrome';
+    const b={library_type:k};
+    if(k==='custom') b.naming={cover_name:val(prefix+'-cover'),artist_image_name:val(prefix+'-artist'),
+        disc_covers:document.getElementById(prefix+'-disc').checked,embed_art:document.getElementById(prefix+'-embed').checked};
+    return b;
+}
+async function saveLibType(){
+    const s2=document.getElementById('libtype-status');
+    try{
+        const before=clientCfg.naming_key;
+        fillCfgForm(await api('/api/config',{method:'POST',body:JSON.stringify(libTypeBody('st'))}));
+        s2.textContent='✓ Saved'; s2.className='ok';
+        if(lib && before!==clientCfg.naming_key){ s2.textContent='✓ Saved — rescanning with the new file names…'; await doScan(true); showV('v-settings'); s2.textContent='✓ Saved and rescanned'; }
+    }catch(e){ s2.textContent='✗ '+e.message; s2.className='err'; }
 }
 
 // ── Updates ───────────────────────────────────────────────────────────────
@@ -908,7 +980,7 @@ function setupRoot(){
     return u.replace(/\/+$/,'');
 }
 function setupBody(){
-    const b={library_root:setupRoot()};
+    const b={library_root:setupRoot(), ...libTypeBody('su')};
     if(setupKindSel==='smb'){
         b.storage_username=val('su-smb-user'); b.smb_port=val('su-smb-port')||445;
         const pw=document.getElementById('su-smb-pass').value; if(pw) b.storage_password=pw;
@@ -954,6 +1026,7 @@ function prefillSetup(c){
 }
 function openSetup(){
     prefillSetup(clientCfg);
+    renderLibType('su');
     document.getElementById('su-cancel').classList.toggle('hidden',!lib);
     showV('v-setup');
 }
@@ -1237,7 +1310,7 @@ async function selectArtistImg(url,isUpload){
         const imgEl=document.getElementById('sa-cur');
         imgEl.src=d.data_url; imgEl.dataset.full=url; imgEl.style.display='block';
         document.getElementById('sa-none').classList.add('hidden');
-        document.getElementById('sa-saved').textContent='✓ Saved as artist.jpg';
+        document.getElementById('sa-saved').textContent='✓ Saved as '+AN();
         document.getElementById('sa-saved').classList.remove('hidden');
         document.getElementById('sa-continue-btn').classList.remove('hidden');
         const skip=document.getElementById('sa-skip-btn');
@@ -1324,10 +1397,10 @@ async function loadAlbumStep(ai,ali){
     searchAlbumArt(0);
 }
 
-// Which folders still need a cover.jpg: the album folder, plus every disc folder of a multi-disc album.
+// Which folders need the cover file: the album folder, plus (if configured) every disc folder.
 function coverFolders(album){
     const rows=[{label:'Album folder',ok:!!album.cover_in_root}];
-    if(album.is_multi_disc) album.disc_info.forEach(d=>rows.push({label:d.name||'disc',ok:!!d.has_cover}));
+    if(album.is_multi_disc && clientCfg.disc_covers!==false) album.disc_info.forEach(d=>rows.push({label:d.name||'disc',ok:!!d.has_cover}));
     return rows;
 }
 function missingCoverFolders(album){
@@ -1335,7 +1408,7 @@ function missingCoverFolders(album){
 }
 function renderDiscInfo(album){
     const el=document.getElementById('alb-disc-covers');
-    el.innerHTML='<div class="note" style="margin:4px 0 2px">cover.jpg in:</div>'+coverFolders(album).map(r=>
+    el.innerHTML='<div class="note" style="margin:4px 0 2px">'+esc(CN())+' in:</div>'+coverFolders(album).map(r=>
         '<div class="disc-info-row">'+(r.ok?'<span class="ok">✓</span>':'<span class="err">✗</span>')+'<span>'+esc(r.label)+'</span></div>'
     ).join('');
 }
@@ -1464,7 +1537,7 @@ async function doEmbed(source,imageUrl){
 
     try{
         const d=await api('/api/prepare-embed',{method:'POST',body:JSON.stringify(body)});
-        // cover.jpg now exists in the album folder and every disc folder
+        // the cover file now exists in the album folder (and the disc folders, if configured)
         album.cover_path=d.cover_path; album.cover_in_root=true;
         album.disc_info.forEach(x=>{ x.has_cover=true; });
         (d.disc_covers||[]).forEach(dc=>{
@@ -1525,7 +1598,7 @@ function onEmbedDone(errors,al,gen){
 
     const done=document.getElementById('alb-done');
     done.classList.remove('hidden');
-    setEl('alb-done-txt','✓ Embedded into all '+al.total_tracks+' tracks  ');
+    setEl('alb-done-txt',clientCfg.embed_art===false?'✓ Saved '+CN()+'  ':'✓ Embedded into all '+al.total_tracks+' tracks  ');
     setEl('alb-done-err',errors&&errors.length?'⚠ '+errors.length+' track'+(errors.length>1?'s':'')+' had errors':'');
 
     document.getElementById('alb-keep-btn').disabled=false;
@@ -1692,7 +1765,7 @@ async function checkThisAlbum(){
 }
 
 // ── Missing report ────────────────────────────────────────────────────────
-// ── Quick fixes (bulk cover.jpg) ──────────────────────────────────────────
+// ── Quick fixes (bulk cover files) ──────────────────────────────────────────
 let fixTimer=null;
 function fixCandidates(){
     const fromImage=[], fromEmbedded=[];
@@ -1711,11 +1784,11 @@ function renderQuickFixes(){
     if(!fromImage.length&&!fromEmbedded.length) return;
     box.innerHTML='<h3>Quick fixes</h3>'+
         (fromImage.length?'<div class="cfg-row" style="margin:6px 0"><button class="primary" onclick="runFix(\'image\')">Fix '+fromImage.length+' album'+(fromImage.length===1?'':'s')+'</button>'+
-            '<span>have a cover image, but not as <code>cover.jpg</code> in every folder (e.g. only CD 1 has one, or it is <code>folder.jpg</code>)</span></div>':'')+
+            '<span>have a cover image, but not as <code>'+esc(CN())+'</code> in every folder that needs one (e.g. only CD 1 has one, or it has another name)</span></div>':'')+
         (fromEmbedded.length?'<div class="cfg-row" style="margin:6px 0"><button onclick="runFix(\'embedded\')">Try '+fromEmbedded.length+' album'+(fromEmbedded.length===1?'':'s')+'</button>'+
             '<span>have no cover file — use the art embedded in their tracks where there is some</span></div>':'')+
-        '<label class="note" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="fix-embed" checked> also embed each cover into the tracks of its folder</label>'+
-        '<p class="note">Existing <code>cover.jpg</code> files are never replaced, so discs keep their own art. To pick new art, use the album page.</p>'+
+        (clientCfg.embed_art!==false?'<label class="note" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="fix-embed" checked> also embed each cover into the tracks of its folder</label>':'<input type="checkbox" id="fix-embed" class="hidden">')+
+        '<p class="note">Existing <code>'+esc(CN())+'</code> files are never replaced, so discs keep their own art. To pick new art, use the album page.</p>'+
         '<div id="fix-progress" class="note"></div>';
 }
 async function runFix(kind){
@@ -1760,11 +1833,11 @@ function showMissing(){
         noCover.push(a.name+' — '+al.name+(al.is_multi_disc&&miss.length?'  (missing in: '+miss.join(', ')+')':''));
     }));
     let html='';
-    html+='<div class="miss-section"><h3>Artists without artist.jpg ('+noImg.length+')</h3>';
+    html+='<div class="miss-section"><h3>Artists without '+esc(AN())+' ('+noImg.length+')</h3>';
     if(!noImg.length) html+='<p class="ok note">All artists have an image.</p>';
     else noImg.forEach(n=>{ html+='<div class="miss-item">'+esc(n)+'</div>'; });
     html+='</div>';
-    html+='<div class="miss-section"><h3>Albums without cover.jpg ('+noCover.length+')</h3>';
+    html+='<div class="miss-section"><h3>Albums without '+esc(CN())+' ('+noCover.length+')</h3>';
     if(!noCover.length) html+='<p class="ok note">All albums have a cover.</p>';
     else noCover.forEach(s=>{ html+='<div class="miss-item">'+esc(s)+'</div>'; });
     html+='</div>';

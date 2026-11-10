@@ -265,6 +265,14 @@ def api_config():
             except (TypeError, ValueError): pass
         if 'ignored_folders' in d:
             cfg['ignored_folders'] = parse_patterns(d['ignored_folders'])
+        try:
+            if d.get('library_type'):
+                config.apply_library_type(d['library_type'], d.get('naming'))
+            elif d.get('naming'):
+                cfg['library_type'] = 'custom'
+                config.set_naming(d['naming'])
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
         if any(cfg.get(k) != before[k] for k in conn_fields):
             storage.reset_all()   # connection settings changed: drop cached sessions
         save_cfg()
@@ -339,8 +347,8 @@ def api_library():
     # even to a cache written before the folder was ignored. A cache from an
     # older version is not served: the client then rescans automatically.
     lib = _library()
-    if lib and lib.get('version') != SCHEMA_VERSION:
-        return jsonify({})
+    if lib and (lib.get('version') != SCHEMA_VERSION or lib.get('naming') != config.naming_key()):
+        return jsonify({})   # outdated, or naming settings changed: the client rescans
     return jsonify(client_view(apply_ignore(lib)))
 
 @app.route('/api/scan')
@@ -357,7 +365,7 @@ def api_scan():
 
     prev = _library()
     if (not (prev and prev.get('root') == root) or prev.get('version') != SCHEMA_VERSION
-            or request.args.get('full') == '1'):
+            or prev.get('naming') != config.naming_key() or request.args.get('full') == '1'):
         prev = None   # full rescan: re-read every folder, ignore the cache
 
     errors, skipped = [], []
@@ -367,7 +375,7 @@ def api_scan():
         return jsonify({'error': storage.error_message(e, root)}), 502
     errors.sort(key=lambda e: e['path'])
     _cached_lib = {'root': root, 'artists': artists, 'scanned_at': time.time(), 'errors': errors,
-                   'skipped': sorted(skipped), 'version': SCHEMA_VERSION}
+                   'skipped': sorted(skipped), 'version': SCHEMA_VERSION, 'naming': config.naming_key()}
     _save_lib_cache(_cached_lib)
     return jsonify(client_view(_cached_lib))
 
@@ -635,7 +643,8 @@ def api_prepare_embed():
         img, mime = to_jpeg(img, mime), 'image/jpeg'
         saved_cover, disc_covers = write_covers(album_path, disc_info, img)
 
-        all_flacs = collect_album_flacs(disc_info or [{'path': album_path}])
+        # embedding can be switched off in Settings (then only the cover files are written)
+        all_flacs = collect_album_flacs(disc_info or [{'path': album_path}]) if cfg.get('embed_art', True) else []
         job_id = str(uuid.uuid4())
         with _jobs_lock:
             _jobs[job_id] = {'flacs': all_flacs, 'img': img, 'mime': mime}

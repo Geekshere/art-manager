@@ -28,19 +28,31 @@ artist is marked dirty so the next scan never trusts the cache for it.
 import concurrent.futures, threading, time
 
 from . import storage
-from .config import is_ignored
+from .config import cfg, is_ignored
 
-# The rule: every album folder AND every disc folder (CD 1, CD 2, ...) must hold
-# a cover.jpg (any capitalisation). Other image files are only shown as the
-# "current cover" and can be turned into cover.jpg; they don't count as done.
-COVER_JPG        = 'cover.jpg'
-OTHER_COVERS     = ('cover.jpeg', 'cover.png', 'folder.jpg', 'folder.jpeg', 'folder.png',
-                    'front.jpg', 'front.png')
-ARTIST_IMG_NAMES = ('artist.jpg', 'artist.png', 'Artist.jpg', 'Artist.png')
+# The rule: every album folder — and, if cfg['disc_covers'], every disc folder
+# (CD 1, CD 2, ...) — must hold the configured cover file (cfg['cover_name'],
+# e.g. cover.jpg or folder.jpg; any capitalisation). Other images are only
+# shown as the "current cover" and can be turned into the right file; they
+# don't count as done. Same for cfg['artist_image_name'] in artist folders.
+OTHER_COVERS     = ('cover.jpg', 'cover.jpeg', 'cover.png', 'folder.jpg', 'folder.jpeg', 'folder.png',
+                    'front.jpg', 'front.png', 'album.jpg', 'album.png')
+OTHER_ARTIST_IMAGES = ('artist.jpg', 'artist.jpeg', 'artist.png', 'folder.jpg', 'folder.png',
+                       'poster.jpg', 'poster.png')
 
 # Bump when the meaning of cached fields changes: an older cache is then
 # ignored once and the library fully rescanned.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+def cover_name():
+    return (cfg.get('cover_name') or 'cover.jpg').lower()
+
+def artist_image_name():
+    return (cfg.get('artist_image_name') or 'artist.jpg').lower()
+
+def is_junk_file(name):
+    """macOS '._' metadata files end in .flac too, but are not tracks."""
+    return name.startswith('._')
 
 LISTDIR_RETRY_DELAYS = (0.3, 1.0)
 MAX_WORKERS = 8   # keep small: SMB servers and the smbclient pool don't like more
@@ -75,26 +87,41 @@ def _find(dir_path, files, names):
             return storage.join(dir_path, n)
     return None
 
-def find_cover_jpg(dir_path, files):
-    """Path of the folder's cover.jpg (any case), or None."""
+def _named(dir_path, files, name):
     for n in files:
-        if n.lower() == COVER_JPG:
+        if n.lower() == name:
             return storage.join(dir_path, n)
     return None
 
-def _any_cover(dir_path, files):
-    """cover.jpg if present, else another cover-like image to show, else None."""
-    found = find_cover_jpg(dir_path, files)
+def find_cover(dir_path, files):
+    """Path of the folder's required cover file (cfg cover_name, any case), or None."""
+    return _named(dir_path, files, cover_name())
+
+def find_artist_image(dir_path, files):
+    return _named(dir_path, files, artist_image_name())
+
+def _first_of(dir_path, files, names, required):
+    found = _named(dir_path, files, required)
     if found:
         return found
     lower = {n.lower(): n for n in files}
-    for n in OTHER_COVERS:
+    for n in names:
         if n in lower:
             return storage.join(dir_path, lower[n])
     return None
 
+def _any_cover(dir_path, files):
+    """The required cover file if present, else another cover-like image to show, else None."""
+    return _first_of(dir_path, files, OTHER_COVERS, cover_name())
+
+def _any_artist_image(dir_path, files):
+    return _first_of(dir_path, files, OTHER_ARTIST_IMAGES, artist_image_name())
+
+def is_track(name):
+    return name.lower().endswith('.flac') and not is_junk_file(name)
+
 def _flac_count(files):
-    return sum(1 for f in files if f.lower().endswith('.flac'))
+    return sum(1 for f in files if is_track(f))
 
 
 def scan_library(root, prev_artists=None, errors=None, skipped=None):
@@ -184,8 +211,9 @@ def _scan_artist(artist_path, name, fp, cached, errors):
         if album:
             albums.append(album)
 
-    img_path = _find(artist_path, a_files, ARTIST_IMG_NAMES)
-    out = {'name': name, 'path': artist_path, 'has_img': img_path is not None,
+    required = find_artist_image(artist_path, a_files)
+    img_path = required or _any_artist_image(artist_path, a_files)
+    out = {'name': name, 'path': artist_path, 'has_img': required is not None,
            'img_path': img_path, 'albums': albums, 'fp': fp, 'tree': tree}
     if errors:
         out['dirty'] = True
@@ -200,7 +228,7 @@ def _scan_album(album_path, album_name):
     """
     al_files, al_dirs = list_dir(album_path)
     n_direct = _flac_count(al_files)
-    root_jpg = find_cover_jpg(album_path, al_files)
+    root_jpg = find_cover(album_path, al_files)
     root_any = _any_cover(album_path, al_files)
     disc_info, sub = [], None
 
@@ -216,19 +244,21 @@ def _scan_album(album_path, album_name):
             n = _flac_count(d_files)
             if n:
                 disc_info.append({'name': d, 'path': d_path, 'flac_count': n,
-                                  'has_cover': find_cover_jpg(d_path, d_files) is not None,
+                                  'has_cover': find_cover(d_path, d_files) is not None,
                                   'cover_path': _any_cover(d_path, d_files)})
     if not disc_info:
         return None, sub
 
     is_multi = not n_direct
-    # Done = cover.jpg in the album folder and, for multi-disc albums, in every disc folder.
-    complete = root_jpg is not None and all(d['has_cover'] for d in disc_info)
+    # Done = the cover file in the album folder and, for multi-disc albums with
+    # cfg['disc_covers'], in every disc folder too.
+    complete = root_jpg is not None and (not is_multi or not cfg.get('disc_covers', True)
+                                         or all(d['has_cover'] for d in disc_info))
     best = root_any or next((d['cover_path'] for d in disc_info if d['cover_path']), None)
     return {
         'name': album_name, 'path': album_path,
         'is_multi_disc': is_multi, 'disc_info': disc_info,
-        'has_cover': complete,           # every required cover.jpg exists
+        'has_cover': complete,           # every required cover file exists
         'cover_path': best,              # best image to show as "current cover" (may be folder.jpg etc.)
         'cover_in_root': root_jpg is not None,
         'total_tracks': sum(d['flac_count'] for d in disc_info),

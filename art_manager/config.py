@@ -51,9 +51,15 @@ DEFAULTS = {
     'allow_network': False,    # False = this computer only (127.0.0.1)
     'port': 5000,
     'app_password_hash': '',   # PBKDF2 hash of the optional app password; never the password itself
+    # What plays the library; decides the file names below (see LIBRARY_PRESETS).
+    'library_type': None,        # None = not chosen yet (the setup screen asks)
+    'cover_name': 'cover.jpg',   # album cover file, in the album folder (and disc folders)
+    'artist_image_name': 'artist.jpg',
+    'disc_covers': True,         # multi-disc albums also need the cover in every disc folder
+    'embed_art': True,           # also embed the cover into every track
     'update_check': True,        # look for new versions on GitHub every few hours
     'update_auto_install': True, # standalone app: download them and install at the next start
-    'settings_version': 2,     # bumped when a migration in _migrate() must run once
+    'settings_version': 3,     # bumped when a migration in _migrate() must run once
 }
 cfg = dict(DEFAULTS)   # the one live settings dict; mutate it, never rebind it
 
@@ -123,6 +129,13 @@ def _migrate(c):
         c['settings_version'] = 2
         changed = True
 
+    # v3: library types. Existing setups keep exactly what they had (Navidrome naming).
+    if c.get('settings_version', 1) < 3:
+        if c.get('library_root') and not c.get('library_type'):
+            c['library_type'] = 'navidrome'
+        c['settings_version'] = 3
+        changed = True
+
     for k in [k for k in c if k not in DEFAULTS]:
         c.pop(k)
         changed = True
@@ -162,9 +175,61 @@ def public_cfg():
     out = {k: v for k, v in cfg.items() if k not in SECRET_KEYS}
     out['ignored_folders'] = ignored_patterns()
     out['default_ignored_folders'] = DEFAULT_IGNORED
+    out['library_presets'] = LIBRARY_PRESETS
+    out['naming_key'] = naming_key()
     for k in SECRET_KEYS:
         out['has_' + k] = bool(cfg.get(k))
     return out
+
+
+# ── Library types / naming ────────────────────────────────────────────────────
+
+LIBRARY_PRESETS = {
+    'navidrome': {
+        'label': 'Navidrome', 'cover_name': 'cover.jpg', 'artist_image_name': 'artist.jpg',
+        'disc_covers': True, 'embed_art': True,
+        'note': 'Navidrome reads cover.jpg (album folder), artist.jpg (artist folder) and embedded art. '
+                'A cover in each disc folder lets it show per-disc art.'},
+    'plex': {
+        'label': 'Plex / Plexamp', 'cover_name': 'cover.jpg', 'artist_image_name': 'artist.jpg',
+        'disc_covers': False, 'embed_art': True,
+        'note': 'Plex reads cover.jpg in the album folder and artist.jpg in the artist folder when the '
+                'library\'s "Use local assets" option is on; it also reads embedded art.'},
+    'jellyfin': {
+        'label': 'Jellyfin', 'cover_name': 'folder.jpg', 'artist_image_name': 'folder.jpg',
+        'disc_covers': False, 'embed_art': True,
+        'note': 'Jellyfin reads folder.jpg in album folders and in artist folders, and embedded art.'},
+    'custom': {
+        'label': 'Other / my own naming', 'note': 'Choose the file names yourself.'},
+}
+NAMING_KEYS = ('cover_name', 'artist_image_name', 'disc_covers', 'embed_art')
+IMAGE_NAME = re.compile(r'^[^/\\:*?"<>|]+\.(?:jpe?g|png)$', re.I)
+
+def apply_library_type(kind, custom=None):
+    """Set library_type and its naming; for 'custom', take the names from `custom`."""
+    if kind not in LIBRARY_PRESETS:
+        raise ValueError(f'unknown library type {kind!r}')
+    cfg['library_type'] = kind
+    if kind != 'custom':
+        for k in NAMING_KEYS:
+            cfg[k] = LIBRARY_PRESETS[kind][k]
+    if custom:
+        set_naming(custom)
+
+def set_naming(d):
+    for k in ('cover_name', 'artist_image_name'):
+        if k in d:
+            v = str(d[k] or '').strip()
+            if not IMAGE_NAME.match(v):
+                raise ValueError(f'{v!r} is not a usable image file name (use e.g. cover.jpg or folder.png)')
+            cfg[k] = v
+    for k in ('disc_covers', 'embed_art'):
+        if k in d:
+            cfg[k] = bool(d[k])
+
+def naming_key():
+    """Changes when anything that decides 'has a cover' changes (cached scans are then redone)."""
+    return '|'.join(str(cfg.get(k)) for k in NAMING_KEYS)
 
 
 # ── App password ──────────────────────────────────────────────────────────────

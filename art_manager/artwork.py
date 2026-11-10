@@ -5,7 +5,8 @@ import requests
 from mutagen.flac import FLAC, Picture
 
 from . import storage
-from .scan import list_dir
+from .config import cfg
+from .scan import is_track, list_dir
 
 
 def to_data_url(data, mime):
@@ -43,7 +44,7 @@ def decode_uploaded_image(data_url):
 
 def _flacs_in(dir_path):
     files, _ = list_dir(dir_path)
-    return [storage.join(dir_path, f) for f in sorted(files) if f.lower().endswith('.flac')]
+    return [storage.join(dir_path, f) for f in sorted(files) if is_track(f)]
 
 
 def collect_album_flacs(disc_info):
@@ -108,29 +109,47 @@ def to_jpeg(data, mime):
     return out.getvalue()
 
 
-def write_cover(dir_path, jpeg):
-    """Write cover.jpg into one folder, reusing an existing Cover.JPG-style name if there is one."""
-    from .scan import COVER_JPG, find_cover_jpg
+def encode_for(name, jpeg):
+    """JPEG bytes -> the format the file name asks for (.png gets PNG)."""
+    if not name.lower().endswith('.png'):
+        return jpeg
+    from PIL import Image
+    out = io.BytesIO()
+    Image.open(io.BytesIO(jpeg)).save(out, 'PNG', optimize=True)
+    return out.getvalue()
+
+def _write_named(dir_path, name, jpeg, find):
+    """Write the image under `name` (reusing an existing differently-cased file), in name's format."""
     files, _ = list_dir(dir_path)
-    p = find_cover_jpg(dir_path, files) or storage.join(dir_path, COVER_JPG)
-    storage.write_bytes(p, jpeg)
+    p = find(dir_path, files) or storage.join(dir_path, name)
+    storage.write_bytes(p, encode_for(name, jpeg))
     return p
+
+def write_cover(dir_path, jpeg):
+    """Write the configured cover file (cover.jpg, folder.jpg, ...) into one folder."""
+    from .scan import find_cover
+    return _write_named(dir_path, cfg.get('cover_name') or 'cover.jpg', jpeg, find_cover)
+
+def cover_folders(album_path, disc_info):
+    """Folders that need the cover file: the album folder, plus disc folders if configured."""
+    folders = [album_path]
+    if cfg.get('disc_covers', True):
+        folders += [d['path'] for d in disc_info if d.get('path') and d['path'] != album_path]
+    return folders
 
 def write_covers(album_path, disc_info, jpeg):
     """
-    cover.jpg in the album folder and in every disc folder.
-    -> (album cover path, [{'path': disc folder, 'cover_path': its cover.jpg}])
+    The cover file in the album folder and (if configured) every disc folder.
+    -> (album cover path, [{'path': disc folder, 'cover_path': its cover}])
     """
     root = write_cover(album_path, jpeg)
-    discs = [{'path': d['path'], 'cover_path': write_cover(d['path'], jpeg)}
-             for d in disc_info if d.get('path') and d['path'] != album_path]
+    discs = [{'path': f, 'cover_path': write_cover(f, jpeg)} for f in cover_folders(album_path, disc_info)[1:]]
     return root, discs
 
 def write_artist_img(artist_path, data, mime):
-    ext = 'png' if 'png' in mime else 'jpg'
-    p = storage.join(artist_path, f'artist.{ext}')
-    storage.write_bytes(p, data)
-    return p
+    from .scan import find_artist_image
+    return _write_named(artist_path, cfg.get('artist_image_name') or 'artist.jpg', to_jpeg(data, mime),
+                        find_artist_image)
 
 
 def embed_into(flac_path, data, mime):
@@ -152,35 +171,33 @@ def embed_into(flac_path, data, mime):
 
 def fix_album_covers(album, embed=True, use_embedded=True, on_track=None):
     """
-    Make sure the album folder and every disc folder has a cover.jpg, without
-    ever replacing an existing cover.jpg (discs may have their own art).
-    Source for a folder that lacks one, in order: another cover image in that
-    folder (folder.jpg, cover.png, ...), the album's cover, the art embedded in
-    the tracks. With embed=True every track gets its folder's cover.jpg.
-    -> {'status': 'fixed'|'skipped'|'error', 'written': [paths], 'embedded': n, 'message'}
+    Make sure every folder that needs one (album folder, plus disc folders if
+    configured) has the cover file, without ever replacing an existing one
+    (discs may have their own art). Source for a folder that lacks it, in
+    order: another cover image in that folder (folder.jpg, cover.png, ...),
+    the album's cover, the art embedded in the tracks. With embed=True (and
+    embedding on in Settings) every track gets its folder's cover.
+    -> {'status': 'fixed'|'skipped', 'written': [paths], 'embedded': n, 'message'}
     """
-    from .scan import _any_cover, find_cover_jpg
-    folders = [album['path']] + [d['path'] for d in album.get('disc_info', []) if d['path'] != album['path']]
+    from .scan import _any_cover, find_cover
+    root = album['path']
+    folders = [root] + [d['path'] for d in album.get('disc_info', []) if d['path'] != root]
+    required = cover_folders(root, album.get('disc_info', []))
     listing = {f: list_dir(f)[0] for f in folders}
-    jpg = {f: find_cover_jpg(f, listing[f]) for f in folders}
+    have = {f: find_cover(f, listing[f]) for f in folders}
     other = {f: _any_cover(f, listing[f]) for f in folders}
 
     def load(path):
         return to_jpeg(storage.read_bytes(path), 'image/png' if path.lower().endswith('.png') else 'image/jpeg')
 
     album_img = None
-    root = album['path']
-    if jpg[root]:
-        album_img = storage.read_bytes(jpg[root])
-    elif other[root]:
-        album_img = load(other[root])
-    else:
-        for f in folders:
-            if jpg[f] or other[f]:
-                album_img = storage.read_bytes(jpg[f]) if jpg[f] else load(other[f])
-                break
+    for f in [root] + folders[1:]:            # album folder first, then the discs
+        src = have[f] or other[f]
+        if src:
+            album_img = load(src)
+            break
     if album_img is None and use_embedded:
-        data, mime = find_album_embedded(album['path'], album.get('disc_info', []))
+        data, mime = find_album_embedded(root, album.get('disc_info', []))
         if data:
             album_img = to_jpeg(data, mime)
     if album_img is None:
@@ -189,19 +206,17 @@ def fix_album_covers(album, embed=True, use_embedded=True, on_track=None):
 
     written, folder_img = [], {}
     for f in folders:
-        if jpg[f]:
-            folder_img[f] = storage.read_bytes(jpg[f]) if embed else None
-            continue
-        img = load(other[f]) if other[f] else album_img   # the folder's own art first
-        written.append(write_cover(f, img))
-        folder_img[f] = img
+        if have[f]:
+            folder_img[f] = load(have[f])
+        elif f in required:
+            img = load(other[f]) if other[f] else album_img   # the folder's own art first
+            written.append(write_cover(f, img))
+            folder_img[f] = img
 
     embedded = 0
-    if embed:
+    if embed and cfg.get('embed_art', True):
         for f in folders:
-            img = folder_img.get(f)
-            if not img:
-                continue
+            img = folder_img.get(f) or folder_img.get(root) or album_img
             for fl in _flacs_in(f):
                 embed_into(fl, img, 'image/jpeg')
                 embedded += 1
