@@ -1804,7 +1804,11 @@ function renderCheckReport(){
     const tidy=(r.albums||[]).filter(a=>a.files.some(f=>f.issues.some(i=>CLEAN.includes(i.code))));
     const bulk=tidy.length?'<div class="tg-box" style="margin:6px 0"><button class="primary" onclick="bulkTagCleanup()">Clean up tags in '+tidy.length+' album'+(tidy.length===1?'':'s')+'</button> '+
         '<span class="note">merges field names written several ways (ALBUMARTIST / album_artist …), removes duplicate and empty values. Backups are kept — undo from each album\'s Tags page.</span> <span id="bulk-tag-status" class="note"></span></div>':'';
-    out.innerHTML=bulk+albums.map((a,k)=>'<div class="chk-album"><div class="chk-album-hdr"><span>'+esc(a.artist)+' — '+esc(a.album)+'</span>'+
+    const badCov=(r.albums||[]).filter(a=>a.files.some(f=>f.kind==='cover'&&f.issues.some(i=>i.code==='cover_not_jpeg')));
+    window._badCovers=badCov;
+    const covBulk=badCov.length?'<div class="tg-box" style="margin:6px 0"><button onclick="bulkCoverConvert()">Convert '+badCov.length+' cover'+(badCov.length===1?'':'s')+'</button> '+
+        '<span class="note">named <code>'+esc(CN())+'</code> but really another image type (some players and car stereos can\'t show them) — re-saved as a real '+(CN().endsWith('.png')?'PNG':'JPEG')+'.</span> <span id="bulk-cov-status" class="note"></span></div>':'';
+    out.innerHTML=bulk+covBulk+albums.map((a,k)=>'<div class="chk-album"><div class="chk-album-hdr"><span>'+esc(a.artist)+' — '+esc(a.album)+'</span>'+
         '<button style="margin-left:auto;font-size:11px" data-tags="'+k+'">Tags…</button><button style="font-size:11px" data-open="'+k+'">Open album →</button></div>'+
         a.albumIssues.map(line).join('')+
         a.files.map(f=>'<div class="chk-row chk-file">'+esc(f.name)+'</div>'+f.issues.map(i=>line(i).replace('chk-row','chk-row" style="padding-left:28px')).join('')).join('')+
@@ -1827,6 +1831,25 @@ async function bulkTagCleanup(){
             st.innerHTML=d.status==='running'?'<span class="spinner"></span> '+d.done+' / '+d.total+' albums · '+esc(d.current||''):
                 (d.errors.length?'<span class="warn">Cleaned '+d.files+' files; '+d.errors.length+' failed</span>':'<span class="ok">✓ Cleaned up '+d.files+' files. Run the check again to see the result.</span>');
             if(d.status==='running') setTimeout(tick,600);
+        };
+        tick();
+    }catch(e){ st.textContent='✗ '+e.message; }
+}
+async function bulkCoverConvert(){
+    const albums=(window._badCovers||[]).map(a=>{
+        for(const ar of lib.artists){ const al=ar.albums.find(x=>x.path===a.path); if(al) return {path:al.path,disc_info:al.disc_info,label:ar.name+' — '+al.name}; }
+        return null;
+    }).filter(Boolean);
+    const st=document.getElementById('bulk-cov-status');
+    if(!albums.length) return;
+    try{
+        const job=await api('/api/fix-covers',{method:'POST',body:JSON.stringify({albums,mode:'tidy',remove_old:recall('fixRemove',true)})});
+        const tick=async()=>{
+            const d=await api('/api/fix-covers/'+job.id);
+            if(d.status==='running'){ st.innerHTML='<span class="spinner"></span> '+d.done+' / '+d.total; setTimeout(tick,500); return; }
+            const errs=(d.results||[]).filter(x=>x.status==='error');
+            st.innerHTML=errs.length?'<span class="warn">'+errs.length+' failed: '+errs.map(e=>esc(e.label+': '+e.message)).join('; ')+'</span>':
+                '<span class="ok">✓ Converted '+((d.counts||{}).fixed||0)+'. Run the check again to see the result.</span>';
         };
         tick();
     }catch(e){ st.textContent='✗ '+e.message; }
@@ -2100,37 +2123,46 @@ async function tgRawSave(){
 // ── Quick fixes (bulk cover files) ──────────────────────────────────────────
 let fixTimer=null;
 function fixCandidates(){
-    const fromImage=[], fromEmbedded=[];
-    lib.artists.forEach(a=>a.albums.forEach(al=>{
-        if(al.has_cover) return;
-        const item={path:al.path,disc_info:al.disc_info,label:a.name+' — '+al.name};
-        (al.cover_path?fromImage:fromEmbedded).push(item);
-    }));
-    return {fromImage,fromEmbedded};
+    const fromImage=[], fromEmbedded=[], tidy=[];
+    lib.artists.forEach(a=>{
+        // artist.png / Artist.JPEG / ... -> artist.jpg (or the other way round for .png names)
+        if(a.img_variants) tidy.push({path:a.path,artist:true,label:a.name});
+        a.albums.forEach(al=>{
+            const item={path:al.path,disc_info:al.disc_info,label:a.name+' — '+al.name};
+            if(al.has_cover){ if(al.cover_variants) tidy.push(item); return; }
+            (al.cover_path?fromImage:fromEmbedded).push(item);
+        });
+    });
+    return {fromImage,fromEmbedded,tidy};
 }
 function renderQuickFixes(){
     const box=document.getElementById('quick-fixes');
     if(!lib){ box.innerHTML=''; box.classList.add('hidden'); return; }
-    const {fromImage,fromEmbedded}=fixCandidates();
-    box.classList.toggle('hidden',!fromImage.length&&!fromEmbedded.length);
-    if(!fromImage.length&&!fromEmbedded.length) return;
+    const {fromImage,fromEmbedded,tidy}=fixCandidates();
+    box.classList.toggle('hidden',!fromImage.length&&!fromEmbedded.length&&!tidy.length);
+    if(!fromImage.length&&!fromEmbedded.length&&!tidy.length) return;
+    const stem=n=>n.replace(/\.[^.]+$/,'');
     box.innerHTML='<h3>Quick fixes</h3>'+
         (fromImage.length?'<div class="cfg-row" style="margin:6px 0"><button class="primary" onclick="runFix(\'image\')">Fix '+fromImage.length+' album'+(fromImage.length===1?'':'s')+'</button>'+
             '<span>have a cover image, but not as <code>'+esc(CN())+'</code> in every folder that needs one (e.g. only CD 1 has one, or it has another name)</span></div>':'')+
         (fromEmbedded.length?'<div class="cfg-row" style="margin:6px 0"><button onclick="runFix(\'embedded\')">Try '+fromEmbedded.length+' album'+(fromEmbedded.length===1?'':'s')+'</button>'+
             '<span>have no cover file — use the art embedded in their tracks where there is some</span></div>':'')+
+        (tidy.length?'<div class="cfg-row" style="margin:6px 0"><button onclick="runFix(\'tidy\')">Tidy '+tidy.length+' folder'+(tidy.length===1?'':'s')+'</button>'+
+            '<span>have a second copy of the cover or artist image under another type or spelling (<code>'+esc(stem(CN()))+'.png</code>, <code>'+esc(stem(CN()))+'.jpeg</code>, …) next to <code>'+esc(CN())+'</code> / <code>'+esc(AN())+'</code>, or only that copy — players may show the old one</span></div>':'')+
+        '<label class="note" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="fix-remove" '+(recall('fixRemove',true)?'checked':'')+' onchange="store(\'fixRemove\',this.checked)"> after converting <code>.png</code> / <code>.jpeg</code> / … into <code>'+esc(CN())+'</code>, delete the old file (an existing <code>'+esc(CN())+'</code> is kept; unreadable images are never deleted)</label>'+
         (clientCfg.embed_art!==false?'<label class="note" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="fix-embed" checked> also embed each cover into the tracks of its folder</label>':'<input type="checkbox" id="fix-embed" class="hidden">')+
         '<p class="note">Existing <code>'+esc(CN())+'</code> files are never replaced, so discs keep their own art. To pick new art, use the album page.</p>'+
         '<div id="fix-progress" class="note"></div>';
 }
 async function runFix(kind){
-    const {fromImage,fromEmbedded}=fixCandidates();
-    const albums=kind==='image'?fromImage:fromEmbedded;
+    const {fromImage,fromEmbedded,tidy}=fixCandidates();
+    const albums=kind==='image'?fromImage:kind==='tidy'?tidy:fromEmbedded;
     if(!albums.length) return;
     const prog=document.getElementById('fix-progress');
     document.querySelectorAll('#quick-fixes button').forEach(b=>b.disabled=true);
     try{
-        const job=await api('/api/fix-covers',{method:'POST',body:JSON.stringify({albums,embed:document.getElementById('fix-embed').checked,use_embedded:true})});
+        const job=await api('/api/fix-covers',{method:'POST',body:JSON.stringify({albums,embed:document.getElementById('fix-embed').checked,use_embedded:true,
+            mode:kind==='tidy'?'tidy':'fix',remove_old:document.getElementById('fix-remove').checked})});
         const tick=async()=>{
             const d=await api('/api/fix-covers/'+job.id);
             prog.innerHTML='<span class="spinner"></span> '+d.done+' / '+d.total+' albums · '+d.tracks+' tracks · '+esc(d.current||'');
@@ -2142,7 +2174,9 @@ async function runFix(kind){
             document.getElementById('fix-progress') && (document.getElementById('fix-progress').innerHTML='');
             const msg=document.createElement('p');
             msg.className=errs.length?'warn':'ok';
-            msg.innerHTML='✓ Fixed '+(c.fixed||0)+' album'+((c.fixed||0)===1?'':'s')+(c.skipped?' · '+c.skipped+' had no art to use':'')+
+            const removed=(d.results||[]).reduce((n,r)=>n+((r.removed||[]).length),0);
+            msg.innerHTML='✓ Fixed '+(c.fixed||0)+' '+(kind==='tidy'?'folder':'album')+((c.fixed||0)===1?'':'s')+(c.skipped?' · '+c.skipped+(kind==='tidy'?' needed no change':' had no art to use'):'')+
+                (removed?' · removed '+removed+' old file'+(removed===1?'':'s'):'')+
                 (errs.length?' · '+errs.length+' failed: '+errs.map(e=>esc(e.label+': '+e.message)).join('; '):'');
             document.getElementById('missing-body').prepend(msg);
         };

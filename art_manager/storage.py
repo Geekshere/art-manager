@@ -65,6 +65,8 @@ class Storage:
         raise NotImplementedError
     def open(self, path, mode='rb'):   # 'rb', 'wb', 'rb+'
         raise NotImplementedError
+    def remove(self, path):            # delete one file
+        raise NotImplementedError
 
     def join(self, base, *parts):
         out = base.rstrip('/')
@@ -125,6 +127,9 @@ class LocalStorage(Storage):
 
     def open(self, path, mode='rb'):
         return open(self._p(path), mode)
+
+    def remove(self, path):
+        os.remove(self._p(path))
 
     def join(self, base, *parts):
         if base.lower().startswith('file://'):
@@ -204,6 +209,10 @@ class SMBStorage(Storage):
     def open(self, path, mode='rb'):
         unc, port = self._prep(path)
         return smbclient.open_file(unc, mode=mode, port=port)
+
+    def remove(self, path):
+        unc, port = self._prep(path)
+        smbclient.remove(unc, port=port)
 
     def reset(self):
         with self._lock:
@@ -356,6 +365,9 @@ class WebDAVStorage(Storage):
             return _UploadOnClose(self, path, data)
         raise ValueError(f'unsupported mode {mode!r} for WebDAV')
 
+    def remove(self, path):
+        self._req('DELETE', path, ok=(200, 204))
+
     def upload(self, path, data):
         """Upload via a temporary name + MOVE so readers never see a half-written file."""
         tmp = self.join(self.dirname(path), f'.artmgr-tmp-{uuid.uuid4().hex[:8]}-{self.basename(path)}')
@@ -479,6 +491,7 @@ def reset_all():
 def scandir(path):          return backend_for(path).scandir(path)
 def stat(path):             return backend_for(path).stat(path)
 def open_file(path, mode='rb'): return backend_for(path).open(path, mode)
+def remove(path):           return backend_for(path).remove(path)
 def join(base, *parts):     return backend_for(base).join(base, *parts)
 def basename(path):         return backend_for(path).basename(path)
 def dirname(path):          return backend_for(path).dirname(path)

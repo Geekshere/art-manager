@@ -266,3 +266,24 @@ def test_file_check_through_backend(client, backend):
     assert len(flacs) == 2
     for f in flacs:   # silent fixture tracks: valid audio, just untagged / no art
         assert not [i for i in f['issues'] if i['level'] == 'error'], f
+
+def test_tidy_converts_and_removes_through_backend(client, backend):
+    import io, time
+    from PIL import Image
+    root, url = backend
+    b = io.BytesIO(); Image.new('RGB', (600, 600), 'red').save(b, 'PNG')
+    disk = root / 'Alpha' / 'Second'
+    (disk / 'Cover.PNG').write_bytes(b.getvalue())
+    lib = _scan(client, url)
+    al = _album(lib, 'Alpha', 'Second')
+    assert al['cover_variants'] == 1
+    job = client.post('/api/fix-covers', json={'mode': 'tidy', 'albums': [al]}).json
+    for _ in range(200):
+        d = client.get(f"/api/fix-covers/{job['id']}").json
+        if d['status'] != 'running':
+            break
+        time.sleep(0.05)
+    assert d['counts'] == {'fixed': 1}, d
+    assert sorted(p.name for p in disk.iterdir() if not p.name.endswith('.flac')) == ['cover.jpg']
+    assert (disk / 'cover.jpg').read_bytes()[:3] == b'\xff\xd8\xff'
+    assert _album(_scan(client, url), 'Alpha', 'Second')['has_cover']

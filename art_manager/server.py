@@ -6,7 +6,8 @@ from flask import Flask, Response, jsonify, render_template, request
 
 from . import __version__, check, config, formats, storage, tags, updater
 from .artwork import (collect_album_flacs, decode_uploaded_image, dl_image, embed_into,
-                      find_album_embedded, fix_album_covers, to_data_url, to_jpeg, track_pictures,
+                      find_album_embedded, fix_album_covers, sniff_image, tidy_album, tidy_artist,
+                      to_data_url, to_jpeg, track_pictures,
                       write_artist_img, write_covers)
 from .config import cfg, is_ignored, load_cfg, parse_patterns, public_cfg, save_cfg
 from .scan import SCHEMA_VERSION, apply_ignore, client_view, is_track, list_dir, scan_library
@@ -465,13 +466,20 @@ def api_track_art():
 @app.route('/api/image/local')
 def api_local_img():
     p = request.args.get('path', '')
-    if not p.lower().endswith(('.jpg', '.jpeg', '.png')) or not _in_library(p):
+    from .scan import IMAGE_EXTS
+    if not p.lower().endswith(IMAGE_EXTS) or not _in_library(p):
         return '', 400
     try:
         data = storage.read_bytes(p)
     except Exception:
         return '', 404
-    return Response(data, mimetype='image/png' if p.lower().endswith('.png') else 'image/jpeg')
+    mime = sniff_image(data) or 'image/jpeg'          # by content: cover.jpg may really be a PNG
+    if mime in ('image/bmp', 'image/tiff'):           # browsers can't show TIFF
+        try:
+            data, mime = to_jpeg(data, mime), 'image/jpeg'
+        except ValueError:
+            return '', 415
+    return Response(data, mimetype=mime)
 
 @app.route('/api/image/redacted')
 def api_redacted_image():
@@ -553,9 +561,11 @@ def api_check_album():
 _fix_jobs = {}
 
 class _FixJob:
-    def __init__(self, albums, embed, use_embedded):
+    def __init__(self, albums, embed, use_embedded, tidy=False, remove_old=True):
         self.id = uuid.uuid4().hex[:12]
         self.albums, self.embed, self.use_embedded = albums, embed, use_embedded
+        self.tidy = tidy   # only convert cover.png / cover.jpeg / ... into the right file
+        self.remove_old = remove_old
         self.done, self.tracks, self.current, self.status = 0, 0, '', 'running'
         self.cancelled = False
         self.results = []
@@ -574,8 +584,14 @@ class _FixJob:
                 break
             self.current = al.get('label') or al['path']
             try:
-                r = fix_album_covers(al, embed=self.embed, use_embedded=self.use_embedded,
-                                     on_track=lambda _p: setattr(self, 'tracks', self.tracks + 1))
+                if self.tidy:
+                    t = tidy_artist(al['path'], self.remove_old) if al.get('artist') else tidy_album(al, self.remove_old)
+                    r = dict(t, status='fixed' if t['written'] or t['removed'] else 'skipped', embedded=0,
+                             message='' if t['written'] or t['removed'] else 'nothing to change')
+                else:
+                    r = fix_album_covers(al, embed=self.embed, use_embedded=self.use_embedded,
+                                         on_track=lambda _p: setattr(self, 'tracks', self.tracks + 1),
+                                         remove_old=self.remove_old)
             except Exception as e:
                 r = {'status': 'error', 'written': [], 'embedded': 0, 'message': storage.error_message(e, al['path'])}
             r['path'] = al['path']; r['label'] = al.get('label', '')
@@ -587,14 +603,15 @@ class _FixJob:
 def api_fix_covers():
     """Bulk: give every album/disc folder in the list a cover.jpg (never overwriting one)."""
     d = request.json or {}
-    albums = [{'path': a.get('path', ''), 'disc_info': a.get('disc_info') or [], 'label': a.get('label', '')}
-              for a in d.get('albums', [])]
+    albums = [{'path': a.get('path', ''), 'disc_info': a.get('disc_info') or [], 'label': a.get('label', ''),
+               'artist': bool(a.get('artist'))} for a in d.get('albums', [])]
     for a in albums:
         if (err := _check_paths(a['path'], *[x.get('path', '') for x in a['disc_info']])):
             return err
     if any(j.status == 'running' for j in _fix_jobs.values()):
         return jsonify({'error': 'A fix is already running'}), 409
-    job = _FixJob(albums, embed=bool(d.get('embed', True)), use_embedded=bool(d.get('use_embedded', True)))
+    job = _FixJob(albums, embed=bool(d.get('embed', True)), use_embedded=bool(d.get('use_embedded', True)),
+                  tidy=d.get('mode') == 'tidy', remove_old=bool(d.get('remove_old', True)))
     _fix_jobs[job.id] = job
     threading.Thread(target=job.run, daemon=True, name='fix').start()
     return jsonify(job.progress())

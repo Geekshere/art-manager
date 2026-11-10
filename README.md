@@ -35,6 +35,11 @@ It only ever touches artwork — never tags, genres or filenames.
   remaster), an edition note is suggested from the folder name and written to
   the edition/version field (and optionally the comment or album title), so
   players keep them apart
+- **Wrong image types and names:** `cover.png`, `Cover.JPEG`, `cover.webp`, a
+  `cover.jpg` that is really a PNG — Quick fixes turn them into a real
+  `cover.jpg` (JPEGs copied unchanged, others converted), and by default
+  delete the old copy so players can't show it. An existing `cover.jpg` is
+  kept; unreadable images are never deleted. Same for artist images
 - **Tag clean-up:** merges fields written several ways (`ALBUMARTIST`,
   `album_artist`, `ALBUM ARTIST` → one `ALBUMARTIST`), removes duplicate and
   empty values, trims spaces and repairs garbled text (`CafÃ©` → `Café`) —

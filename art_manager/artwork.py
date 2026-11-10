@@ -165,9 +165,100 @@ def embed_into(path, data, mime):
     formats.embed(path, data, mime)
 
 
+# ── Wrong type / extension ────────────────────────────────────────────────────
+
+def sniff_image(data):
+    return ('image/jpeg' if data[:3] == b'\xff\xd8\xff' else 'image/png' if data[:8] == b'\x89PNG\r\n\x1a\n'
+            else 'image/webp' if data[:4] == b'RIFF' and data[8:12] == b'WEBP' else 'image/gif' if data[:3] == b'GIF'
+            else 'image/bmp' if data[:2] == b'BM' else 'image/tiff' if data[:4] in (b'II*\x00', b'MM\x00*') else None)
+
+def _image_info(path):
+    """(bytes, real mime, pixels) of an image file, or None if it isn't a readable image."""
+    from PIL import Image
+    data = storage.read_bytes(path)
+    mime = sniff_image(data)
+    try:
+        w, h = Image.open(io.BytesIO(data)).size
+    except Exception:
+        return None
+    return data, mime, w * h
+
+def tidy_folder(folder, required, find, files=None, remove=True):
+    """
+    Make `required` (cover.jpg, artist.jpg, folder.jpg, ...) the one proper
+    image of its kind in a folder:
+      - cover.png / Cover.JPEG / cover.webp / ... and no cover.jpg -> converted
+        into cover.jpg (JPEGs are copied unchanged, others converted at q95)
+      - several of them and no cover.jpg -> the one with the most pixels
+      - cover.jpg and cover.png both there -> cover.jpg is kept
+      - cover.jpg that is really a PNG (or anything but a JPEG) -> re-encoded
+      - with remove=True the other spellings are deleted
+        afterwards, so players can't pick the old one. Unreadable images are
+        never deleted, and nothing is deleted unless the new file was written.
+    -> {'written': path or None, 'removed': [paths], 'kept': [paths]}
+    """
+    from .scan import variants
+    if files is None:
+        files = list_dir(folder)[0]
+    have = find(folder, files)
+    others = variants(folder, files, required)
+    out = {'written': None, 'removed': [], 'kept': []}
+    want_png = required.endswith('.png')
+    want = 'image/png' if want_png else 'image/jpeg'
+    cand = []
+    for p in ([have] if have else []) + others:
+        try:
+            info = _image_info(p)
+        except Exception:
+            info = None
+        if info:
+            cand.append((p, *info))
+        elif p != have:
+            out['kept'].append(p)          # not readable: leave it for the user to look at
+    if not cand:
+        return out
+    # an existing, readable cover.jpg is kept (it's the one players use and the
+    # one picked in this app); otherwise the biggest of the other spellings
+    best = next((c for c in cand if c[0] == have), None) or max(cand, key=lambda c: c[3])
+    path, data, mime, _ = best
+    if path != have or mime != want:
+        jpeg = to_jpeg(data, mime or 'image/jpeg')
+        out['written'] = _write_named(folder, required, jpeg, find)
+    if remove:
+        for p, *_ in cand:
+            if p != have and p != out['written']:
+                try:
+                    storage.remove(p)
+                    out['removed'].append(p)
+                except Exception:
+                    out['kept'].append(p)
+    else:
+        out['kept'] += [p for p, *_ in cand if p != have and p != out['written']]
+    return out
+
+def tidy_album(album, remove=True):
+    """tidy_folder() for the album folder and every disc folder that has such images."""
+    from .scan import find_cover
+    name = (cfg.get('cover_name') or 'cover.jpg').lower()
+    root = album['path']
+    res = {'written': [], 'removed': [], 'kept': []}
+    for f in dict.fromkeys([root] + [d['path'] for d in album.get('disc_info', [])]):
+        r = tidy_folder(f, name, find_cover, remove=remove)
+        if r['written']:
+            res['written'].append(r['written'])
+        res['removed'] += r['removed']; res['kept'] += r['kept']
+    return res
+
+def tidy_artist(artist_path, remove=True):
+    from .scan import find_artist_image
+    name = (cfg.get('artist_image_name') or 'artist.jpg').lower()
+    r = tidy_folder(artist_path, name, find_artist_image, remove=remove)
+    return {'written': [r['written']] if r['written'] else [], 'removed': r['removed'], 'kept': r['kept']}
+
+
 # ── Bulk fix ──────────────────────────────────────────────────────────────────
 
-def fix_album_covers(album, embed=True, use_embedded=True, on_track=None):
+def fix_album_covers(album, embed=True, use_embedded=True, on_track=None, remove_old=True):
     """
     Make sure every folder that needs one (album folder, plus disc folders if
     configured) has the cover file, without ever replacing an existing one
@@ -178,6 +269,7 @@ def fix_album_covers(album, embed=True, use_embedded=True, on_track=None):
     -> {'status': 'fixed'|'skipped', 'written': [paths], 'embedded': n, 'message'}
     """
     from .scan import _any_cover, find_cover
+    tidied = tidy_album(album, remove=remove_old)   # cover.png / cover.jpeg -> cover.jpg first
     root = album['path']
     folders = [root] + [d['path'] for d in album.get('disc_info', []) if d['path'] != root]
     required = cover_folders(root, album.get('disc_info', []))
@@ -186,7 +278,8 @@ def fix_album_covers(album, embed=True, use_embedded=True, on_track=None):
     other = {f: _any_cover(f, listing[f]) for f in folders}
 
     def load(path):
-        return to_jpeg(storage.read_bytes(path), 'image/png' if path.lower().endswith('.png') else 'image/jpeg')
+        data = storage.read_bytes(path)
+        return to_jpeg(data, sniff_image(data) or 'image/jpeg')
 
     album_img = None
     for f in [root] + folders[1:]:            # album folder first, then the discs
@@ -199,10 +292,11 @@ def fix_album_covers(album, embed=True, use_embedded=True, on_track=None):
         if data:
             album_img = to_jpeg(data, mime)
     if album_img is None:
-        return {'status': 'skipped', 'written': [], 'embedded': 0,
-                'message': 'no cover image or embedded art to use'}
+        return {'status': 'fixed' if tidied['written'] or tidied['removed'] else 'skipped',
+                'written': tidied['written'], 'removed': tidied['removed'], 'embedded': 0,
+                'message': '' if tidied['written'] else 'no cover image or embedded art to use'}
 
-    written, folder_img = [], {}
+    written, folder_img = list(tidied['written']), {}
     for f in folders:
         if have[f]:
             folder_img[f] = load(have[f])
@@ -222,4 +316,4 @@ def fix_album_covers(album, embed=True, use_embedded=True, on_track=None):
                 embedded += 1
                 if on_track:
                     on_track(fl)
-    return {'status': 'fixed', 'written': written, 'embedded': embedded, 'message': ''}
+    return {'status': 'fixed', 'written': written, 'removed': tidied['removed'], 'embedded': embedded, 'message': ''}

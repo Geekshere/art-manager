@@ -231,6 +231,18 @@ Everything that decides or writes covers reads these — never hard-code
 `/api/library` return `{}` and the next scan a full one. The UI shows names via
 `CN()` / `AN()` and `.cn` / `.an` spans.
 
+### Cover variants / tidy
+
+`scan.variants()` = same stem as the configured name, other image type or
+case (`cover.png`, `Cover.JPEG`, `cover.webp`). Albums carry `cover_variants`,
+artists `img_variants`. `artwork.tidy_folder()`: existing readable required
+file wins, else the variant with most pixels; re-encodes a required file whose
+content is the wrong type (sniffed by magic bytes); deletes the variants
+(`storage.remove`, all backends) only with `remove=True` and only after the
+write, never unreadable ones. `fix_album_covers()` tidies first. UI: Quick
+fixes → Tidy (`/api/fix-covers` with `mode: 'tidy'`), check report → Convert
+covers (`cover_not_jpeg`).
+
 ### Tags
 
 `tags.read_raw()` parses the VORBIS_COMMENT block itself (no picture loading).

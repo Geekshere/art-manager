@@ -29,7 +29,7 @@ import io, os, shutil, struct, subprocess
 from . import formats, storage
 from . import tags as tagmod
 
-CHECK_VERSION = 3          # bump to invalidate cached results when checks change
+CHECK_VERSION = 4          # bump to invalidate cached results when checks change
 MIN_COVER_PX = 500
 BIG_PICTURE = 4 * 1024 * 1024
 HEAD_READ = 64 * 1024
@@ -632,7 +632,8 @@ def check_cover(path):
     except Exception:
         return [_issue('error', 'bad_cover', f'{storage.basename(path)} is damaged or not an image')]
     out = []
-    if fmt != 'JPEG':
+    want = 'PNG' if path.lower().endswith('.png') else 'JPEG'
+    if fmt != want:
         out.append(_issue('warn', 'cover_not_jpeg', f'{storage.basename(path)} is really a {fmt} file'))
     if min(w, h) < MIN_COVER_PX:
         out.append(_issue('warn', 'small_cover', f'{storage.basename(path)} is only {w}×{h} px'))
@@ -669,6 +670,9 @@ def album_issues(file_results, album_name, extras=None, multi_disc=False):
         kinds = sorted({n.rsplit('.', 1)[-1].upper() for n in extras['other_audio']})
         out.append(_issue('info', 'other_audio', f'{len(extras["other_audio"])} audio file(s) in a format this app '
                           f'does not read ({", ".join(kinds)})'))
+    if extras.get('variants'):
+        out.append(_issue('info', 'cover_variants', 'Cover image under another type or spelling: '
+                          + ', '.join(extras['variants'][:6]) + ' — Quick fixes → Tidy turns it into the right file'))
     # the same track in two formats (FLAC + MP3 copies): players list both
     stems = {}
     for r in file_results:
@@ -760,7 +764,8 @@ def _album_tasks(album):
     -> ([(kind, path, Entry)] for every FLAC and every required cover file,
         {'junk': [...], 'other_audio': [...]} names found next to them)
     """
-    tasks, extras = [], {'junk': [], 'other_audio': []}
+    from .scan import cover_name, variants
+    tasks, extras = [], {'junk': [], 'other_audio': [], 'variants': []}
     folders = [album['path']] + [d['path'] for d in album.get('disc_info', []) if d['path'] != album['path']]
     for folder in folders:
         files, _ = list_dir(folder)
@@ -773,6 +778,7 @@ def _album_tasks(album):
                 extras['junk'].append(prefix + name)
             elif low.endswith(_OTHER_AUDIO):
                 extras['other_audio'].append(prefix + name)
+        extras['variants'] += [prefix + storage.basename(v) for v in variants(folder, files, cover_name())]
         cov = find_cover(folder, files)
         if cov:
             tasks.append(('cover', cov, files[storage.basename(cov)]))

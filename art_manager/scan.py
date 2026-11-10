@@ -35,14 +35,17 @@ from .config import cfg, is_ignored
 # e.g. cover.jpg or folder.jpg; any capitalisation). Other images are only
 # shown as the "current cover" and can be turned into the right file; they
 # don't count as done. Same for cfg['artist_image_name'] in artist folders.
-OTHER_COVERS     = ('cover.jpg', 'cover.jpeg', 'cover.png', 'folder.jpg', 'folder.jpeg', 'folder.png',
-                    'front.jpg', 'front.png', 'album.jpg', 'album.png')
-OTHER_ARTIST_IMAGES = ('artist.jpg', 'artist.jpeg', 'artist.png', 'folder.jpg', 'folder.png',
-                       'poster.jpg', 'poster.png')
+# Any capitalisation and any of these image types counts as "another cover
+# image" (cover.PNG, Cover.jpeg, folder.webp, ...).
+IMAGE_EXTS = ('.jpg', '.jpeg', '.jfif', '.png', '.webp', '.gif', '.bmp', '.tif', '.tiff')
+COVER_STEMS = ('cover', 'folder', 'front', 'album', 'albumart')
+ARTIST_STEMS = ('artist', 'folder', 'poster')
+OTHER_COVERS = tuple(st + e for st in COVER_STEMS for e in IMAGE_EXTS)
+OTHER_ARTIST_IMAGES = tuple(st + e for st in ARTIST_STEMS for e in IMAGE_EXTS)
 
 # Bump when the meaning of cached fields changes: an older cache is then
 # ignored once and the library fully rescanned.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 def cover_name():
     return (cfg.get('cover_name') or 'cover.jpg').lower()
@@ -100,11 +103,28 @@ def find_cover(dir_path, files):
 def find_artist_image(dir_path, files):
     return _named(dir_path, files, artist_image_name())
 
+def _stem(name):
+    return name.rsplit('.', 1)[0].lower()
+
+def variants(dir_path, files, required):
+    """
+    Same name, other type or spelling of the required image: 'cover.png',
+    'Cover.JPEG', 'cover.webp' when cover.jpg is wanted. Players often pick
+    these up instead of (or as well as) the right file.
+    """
+    stem = _stem(required)
+    return [storage.join(dir_path, n) for n in sorted(files)
+            if n.lower() != required and _stem(n) == stem and n.lower().endswith(IMAGE_EXTS)
+            and not n.startswith('._')]
+
 def _first_of(dir_path, files, names, required):
     found = _named(dir_path, files, required)
     if found:
         return found
-    lower = {n.lower(): n for n in files}
+    same = variants(dir_path, files, required)     # cover.png before folder.jpg
+    if same:
+        return same[0]
+    lower = {n.lower(): n for n in files if not n.startswith('._')}
     for n in names:
         if n in lower:
             return storage.join(dir_path, lower[n])
@@ -215,7 +235,8 @@ def _scan_artist(artist_path, name, fp, cached, errors):
     required = find_artist_image(artist_path, a_files)
     img_path = required or _any_artist_image(artist_path, a_files)
     out = {'name': name, 'path': artist_path, 'has_img': required is not None,
-           'img_path': img_path, 'albums': albums, 'fp': fp, 'tree': tree}
+           'img_path': img_path, 'img_variants': len(variants(artist_path, a_files, artist_image_name())),
+           'albums': albums, 'fp': fp, 'tree': tree}
     if errors:
         out['dirty'] = True
     return out
@@ -236,8 +257,10 @@ def _scan_album(album_path, album_name):
     if n_direct:
         disc_info = [{'name': None, 'path': album_path, 'flac_count': n_direct,
                       'has_cover': root_jpg is not None, 'cover_path': root_any}]
+        n_variants = len(variants(album_path, al_files, cover_name()))
     else:
         sub = {}
+        n_variants = len(variants(album_path, al_files, cover_name()))
         for d in sorted(al_dirs):
             d_path = storage.join(album_path, d)
             sub[d] = al_dirs[d].fingerprint
@@ -247,6 +270,7 @@ def _scan_album(album_path, album_name):
                 disc_info.append({'name': d, 'path': d_path, 'flac_count': n,
                                   'has_cover': find_cover(d_path, d_files) is not None,
                                   'cover_path': _any_cover(d_path, d_files)})
+                n_variants += len(variants(d_path, d_files, cover_name()))
     if not disc_info:
         return None, sub
 
@@ -263,6 +287,7 @@ def _scan_album(album_path, album_name):
         'cover_path': best,              # best image to show as "current cover" (may be folder.jpg etc.)
         'cover_in_root': root_jpg is not None,
         'total_tracks': sum(d['flac_count'] for d in disc_info),
+        'cover_variants': n_variants,    # cover.png / cover.jpeg / ... next to (or instead of) cover.jpg
     }, sub
 
 
