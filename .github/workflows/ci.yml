@@ -11,7 +11,7 @@ jobs:
   test-linux:
     name: Tests (Linux, Python ${{ matrix.python }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30   # the test step takes ~30 s, but apt mirrors are sometimes very slow
     strategy:
       fail-fast: false
       matrix:
