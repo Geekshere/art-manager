@@ -1844,7 +1844,14 @@ function renderCheckReport(){
     window._badCovers=badCov;
     const covBulk=badCov.length?'<div class="tg-box" style="margin:6px 0"><button onclick="bulkCoverConvert()">Convert '+badCov.length+' cover'+(badCov.length===1?'':'s')+'</button> '+
         '<span class="note">named <code>'+esc(CN())+'</code> but really another image type (some players and car stereos can\'t show them) — re-saved as a real '+(CN().endsWith('.png')?'PNG':'JPEG')+'.</span> <span id="bulk-cov-status" class="note"></span></div>':'';
-    out.innerHTML=bulk+covBulk+albums.map((a,k)=>'<div class="chk-album"><div class="chk-album-hdr"><span>'+esc(a.artist)+' — '+esc(a.album)+'</span>'+
+    const broken=(r.albums||[]).flatMap(a=>a.files.filter(f=>f.kind==='track'&&/\.(flac|mp3)$/i.test(f.name)&&
+        f.issues.some(i=>i.code==='damaged_end'||i.code==='truncated')).map(f=>({path:f.path,label:a.artist+' — '+f.name})));
+    window._brokenFiles=broken;
+    const repBulk=broken.length?'<div class="tg-box" style="margin:6px 0"><button onclick="repairBroken()">Repair '+broken.length+' file'+(broken.length===1?'':'s')+' with a damaged end</button> '+
+        '<span class="note">cuts each file right after its last intact audio frame, so it ends a moment early instead of glitching or stopping. '+
+        'A file damaged in the middle is left alone. The original is kept and can be put back. Best fix is still a fresh copy from where you got it.</span>'+
+        '<div id="repair-status" class="note"></div></div>':'';
+    out.innerHTML=bulk+covBulk+repBulk+albums.map((a,k)=>'<div class="chk-album"><div class="chk-album-hdr"><span>'+esc(a.artist)+' — '+esc(a.album)+'</span>'+
         '<button style="margin-left:auto;font-size:11px" data-tags="'+k+'">Tags…</button><button style="font-size:11px" data-open="'+k+'">Open album →</button></div>'+
         a.albumIssues.map(line).join('')+fileIssuesHTML(a.files,line)+
         '</div>').join('');
@@ -1887,6 +1894,29 @@ function fileIssuesHTML(files,line){
         if(own.length) out+='<div class="chk-row chk-file">'+esc(f.name)+'</div>'+own.map(i=>ind(line(i))).join('');
     });
     return out;
+}
+async function repairBroken(){
+    const files=window._brokenFiles||[];
+    if(!files.length||!confirm('Repair '+files.length+' file'+(files.length===1?'':'s')+'?\n\nEach is cut after its last intact audio frame (usually well under a second is lost). Originals are kept so you can undo.')) return;
+    const st=document.getElementById('repair-status');
+    try{
+        const job=await api('/api/repair',{method:'POST',body:JSON.stringify({paths:files.map(f=>f.path)})});
+        const label=p=>(files.find(f=>f.path===p)||{label:p}).label;
+        const tick=async()=>{
+            const d=await api('/api/repair/'+job.id);
+            if(d.status==='running'){ st.innerHTML='<span class="spinner"></span> '+d.done+' / '+d.total; setTimeout(tick,600); return; }
+            st.innerHTML=d.results.map(x=>'<div>'+(x.status==='repaired'?'<span class="ok">✓</span> ':x.status==='skipped'?'<span class="warn">–</span> ':'<span class="err">✗</span> ')+
+                esc(label(x.path))+': '+esc(x.message)+
+                (x.backup?' <a href="#" data-undo="'+esc(x.backup)+'">undo</a>':'')+'</div>').join('')+
+                '<div>Run the check again to confirm.</div>';
+            st.querySelectorAll('[data-undo]').forEach(a=>a.addEventListener('click',async ev=>{
+                ev.preventDefault();
+                try{ await api('/api/repair/undo',{method:'POST',body:JSON.stringify({backup:a.dataset.undo})}); a.replaceWith('(original put back)'); }
+                catch(e){ alert(e.message); }
+            }));
+        };
+        tick();
+    }catch(e){ st.textContent='✗ '+e.message; }
 }
 async function bulkCoverConvert(){
     const albums=(window._badCovers||[]).map(a=>{

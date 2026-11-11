@@ -55,6 +55,7 @@ art_manager/
   updater.py               self-update of the standalone app from GitHub Releases
   redacted.py              Redacted API source (rate limiter, image-host proxy) + edition lookup
   formats.py               every non-FLAC format: native tag names <-> canonical, pictures, embed, stream info
+  repair.py                cut FLAC/MP3 after the last intact frame (+ STREAMINFO/SEEKTABLE fix), backups, undo
   tags.py                  Vorbis tags: raw read, canonical names, normalize, problems, write, backup/undo
   musicbrainz.py           MusicBrainz release search + Picard-style tag mapping (1 req/s)
   server.py                Flask routes, path confinement, auth, embed jobs (SSE), CLI main()

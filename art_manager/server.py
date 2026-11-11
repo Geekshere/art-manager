@@ -598,6 +598,53 @@ def api_check_album():
     check._save_cache()
     return jsonify(res)
 
+# ── Repair damaged ends ───────────────────────────────────────────────────────
+
+_repair_jobs = {}
+
+@app.route('/api/repair', methods=['POST'])
+def api_repair():
+    """Cut FLAC/MP3 files after their last intact frame (backups kept). Runs in the background."""
+    from . import repair
+    if not request.is_json:
+        return jsonify({'error': 'JSON required'}), 400
+    paths = [str(p) for p in (request.json.get('paths') or [])]
+    if not paths:
+        return jsonify({'error': 'No files given'}), 400
+    if (err := _check_paths(*paths)):
+        return err
+    if any(not is_track(storage.basename(p)) for p in paths):
+        return jsonify({'error': 'Only music files can be repaired'}), 400
+    if any(j['status'] == 'running' for j in _repair_jobs.values()):
+        return jsonify({'error': 'A repair is already running'}), 409
+    job = {'id': uuid.uuid4().hex[:12], 'status': 'running', 'total': len(paths), 'done': 0, 'results': []}
+    _repair_jobs[job['id']] = job
+    def run():
+        for p in paths:
+            job['results'].append(repair.repair(p))
+            job['done'] += 1
+        job['status'] = 'done'
+    threading.Thread(target=run, daemon=True, name='repair').start()
+    return jsonify(job)
+
+@app.route('/api/repair/<job_id>')
+def api_repair_job(job_id):
+    job = _repair_jobs.get(job_id)
+    return jsonify(job) if job else (jsonify({'error': 'Unknown job'}), 404)
+
+@app.route('/api/repair/undo', methods=['POST'])
+def api_repair_undo():
+    from . import repair
+    if not request.is_json:
+        return jsonify({'error': 'JSON required'}), 400
+    try:
+        meta = repair.undo(request.json.get('backup', ''))
+    except FileNotFoundError:
+        return jsonify({'error': 'That backup no longer exists'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'restored': meta['path']})
+
 # ── Bulk fix ──────────────────────────────────────────────────────────────────
 
 _fix_jobs = {}

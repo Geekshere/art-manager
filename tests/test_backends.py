@@ -287,3 +287,28 @@ def test_tidy_converts_and_removes_through_backend(client, backend):
     assert sorted(p.name for p in disk.iterdir() if not p.name.endswith('.flac')) == ['cover.jpg']
     assert (disk / 'cover.jpg').read_bytes()[:3] == b'\xff\xd8\xff'
     assert _album(_scan(client, url), 'Alpha', 'Second')['has_cover']
+
+def test_repair_through_backend(client, backend):
+    import time
+    root, url = backend
+    lib = _scan(client, url)
+    import shutil, subprocess
+    if not shutil.which('ffmpeg'):
+        pytest.skip('ffmpeg needed')
+    disk = next((root / 'Alpha').rglob('*.flac'))
+    subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'anoisesrc=d=3:r=44100', '-ac', '2',
+                    '-c:a', 'flac', str(disk)], check=True)
+    data = disk.read_bytes()
+    disk.write_bytes(data[:-200])
+    remote = url + '/' + disk.relative_to(root).as_posix()
+    job = client.post('/api/repair', json={'paths': [remote]}).json
+    for _ in range(200):
+        d = client.get(f"/api/repair/{job['id']}").json
+        if d['status'] != 'running':
+            break
+        time.sleep(0.05)
+    r = d['results'][0]
+    assert r['status'] == 'repaired', r
+    assert len(disk.read_bytes()) < len(data) - 200
+    assert client.post('/api/repair/undo', json={'backup': r['backup']}).status_code == 200
+    assert disk.read_bytes() == data[:-200]
