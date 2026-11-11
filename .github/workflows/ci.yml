@@ -44,7 +44,14 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
       - name: System packages (ffmpeg for fixtures, Samba for SMB tests, flac for the full-decode check)
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg samba flac
+        # GitHub's own Ubuntu mirror sometimes stalls for half an hour: give it
+        # 5 minutes, then switch to the main Ubuntu mirror and try again.
+        run: |
+          install() { timeout 300 sh -c 'sudo apt-get update -q -o Acquire::Retries=3 && sudo apt-get install -y -q --no-install-recommends -o Acquire::Retries=3 ffmpeg samba flac'; }
+          install && exit 0
+          echo "::warning::package mirror stalled — switching to archive.ubuntu.com"
+          sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+          install
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
