@@ -1,7 +1,14 @@
 ## Download and run — no Python needed
 
-Already using 0.6.0 or newer? You don't need to download anything — the app
-updates itself (Settings → Updates).
+Already using 0.7.0 or newer? You don't need to download anything — the app
+updates itself (Settings → Updates). Coming from 0.6.0: download once — 0.6.0
+can't reach GitHub on macOS because of a certificate problem fixed in 0.7.0.
+
+**New in 0.7:** library types (Navidrome, Plex/Plexamp, Jellyfin or your own
+names) · tag editor with MusicBrainz and Redacted look-ups, editions, clean-up
+and undo · MP3, M4A, Ogg, Opus, WavPack, APE, WAV, AIFF, DSF and WMA · cover
+files tidied automatically (`cover.png` + `cover.jpg` → one real `cover.jpg`)
+· Redacted shown first · many more file checks.
 
 
 | System | File |

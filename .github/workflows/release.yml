@@ -20,8 +20,25 @@ permissions:
   contents: write
 
 jobs:
+  version:
+    # Fail in seconds, not after the builds, when publishing a version that is already out.
+    name: Version check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          TAG="v$(python3 -c 'import re;print(re.search(r"__version__ = .([0-9.]+).", open("art_manager/__init__.py").read()).group(1))')"
+          echo "Version in the code: $TAG"
+          if [[ "$PUBLISH" == "true" ]] && gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::$TAG is already released — bump the version in art_manager/__init__.py first"; exit 1
+          fi
+
   build:
     name: Build (${{ matrix.name }})
+    needs: version
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:

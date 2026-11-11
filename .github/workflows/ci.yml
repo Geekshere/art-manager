@@ -8,6 +8,26 @@ permissions:
   contents: read
 
 jobs:
+  version:
+    # A warning on main when the code changed since the release of the same
+    # version: the next publish would be refused until the version is bumped.
+    name: Version not yet released
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: |
+          TAG="v$(python3 -c 'import re;print(re.search(r"__version__ = .([0-9.]+).", open("art_manager/__init__.py").read()).group(1))')"
+          git fetch --tags -q
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && [ "$(git rev-list -n1 "$TAG")" != "$(git rev-parse HEAD)" ] \
+             && ! git diff --quiet "$TAG" HEAD -- art_manager packaging; then
+            echo "::warning::$TAG is already released and the code has changed since — bump the version before publishing"
+          else
+            echo "$TAG: ok"
+          fi
+
   test-linux:
     name: Tests (Linux, Python ${{ matrix.python }})
     runs-on: ubuntu-latest
