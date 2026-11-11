@@ -1836,7 +1836,7 @@ function renderCheckReport(){
     }).filter(a=>a.albumIssues.length||a.files.length).sort((x,y)=>x.worst-y.worst||x.artist.localeCompare(y.artist));
     if(!albums.length){ out.innerHTML='<p class="ok">Nothing to report'+(show.size<3?' at the selected levels':'')+'. ✓</p>'; return; }
     const line=i=>'<div class="chk-row"><span class="lvl lvl-'+i.level+'">'+i.level+'</span>'+esc(i.msg)+'</div>';
-    const CLEAN=['tag_spellings','dup_values','tag_whitespace','empty_tag','key_case','tag_conflict'];
+    const CLEAN=['tag_spellings','dup_values','tag_whitespace','empty_tag','key_case','tag_conflict','companion_mismatch'];
     const tidy=(r.albums||[]).filter(a=>a.files.some(f=>f.issues.some(i=>CLEAN.includes(i.code))));
     const bulk=tidy.length?'<div class="tg-box" style="margin:6px 0"><button class="primary" onclick="bulkTagCleanup()">Clean up tags in '+tidy.length+' album'+(tidy.length===1?'':'s')+'</button> '+
         '<span class="note">merges field names written several ways (ALBUMARTIST / album_artist …), removes duplicate and empty values. Backups are kept — undo from each album\'s Tags page.</span> <span id="bulk-tag-status" class="note"></span></div>':'';
@@ -1846,8 +1846,7 @@ function renderCheckReport(){
         '<span class="note">named <code>'+esc(CN())+'</code> but really another image type (some players and car stereos can\'t show them) — re-saved as a real '+(CN().endsWith('.png')?'PNG':'JPEG')+'.</span> <span id="bulk-cov-status" class="note"></span></div>':'';
     out.innerHTML=bulk+covBulk+albums.map((a,k)=>'<div class="chk-album"><div class="chk-album-hdr"><span>'+esc(a.artist)+' — '+esc(a.album)+'</span>'+
         '<button style="margin-left:auto;font-size:11px" data-tags="'+k+'">Tags…</button><button style="font-size:11px" data-open="'+k+'">Open album →</button></div>'+
-        a.albumIssues.map(line).join('')+
-        a.files.map(f=>'<div class="chk-row chk-file">'+esc(f.name)+'</div>'+f.issues.map(i=>line(i).replace('chk-row','chk-row" style="padding-left:28px')).join('')).join('')+
+        a.albumIssues.map(line).join('')+fileIssuesHTML(a.files,line)+
         '</div>').join('');
     out.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>openAlbumByPath(albums[+b.dataset.open].path)));
     out.querySelectorAll('[data-tags]').forEach(b=>b.addEventListener('click',()=>{ openAlbumByPath(albums[+b.dataset.tags].path); openTags(); }));
@@ -1870,6 +1869,24 @@ async function bulkTagCleanup(){
         };
         tick();
     }catch(e){ st.textContent='✗ '+e.message; }
+}
+// The same problem on several tracks of an album is listed once ("12 tracks: ..."), not per track.
+function fileIssuesHTML(files,line){
+    const count={}, first={};
+    files.forEach(f=>new Set(f.issues.map(i=>i.msg)).forEach(m=>{ count[m]=(count[m]||0)+1; }));
+    files.forEach(f=>f.issues.forEach(i=>{ if(!first[i.msg]) first[i.msg]=i; }));
+    const shared=Object.keys(count).filter(m=>count[m]>=3);
+    const sharedSet=new Set(shared);
+    const ind=h=>h.replace('chk-row','chk-row" style="padding-left:28px');
+    let out=shared.map(m=>{
+        const i=first[m];
+        return '<div class="chk-row chk-file">'+count[m]+' tracks'+'</div>'+ind(line(i));
+    }).join('');
+    files.forEach(f=>{
+        const own=f.issues.filter(i=>!sharedSet.has(i.msg));
+        if(own.length) out+='<div class="chk-row chk-file">'+esc(f.name)+'</div>'+own.map(i=>ind(line(i))).join('');
+    });
+    return out;
 }
 async function bulkCoverConvert(){
     const albums=(window._badCovers||[]).map(a=>{

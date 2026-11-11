@@ -29,7 +29,7 @@ import io, os, shutil, struct, subprocess
 from . import formats, storage
 from . import tags as tagmod
 
-CHECK_VERSION = 4          # bump to invalidate cached results when checks change
+CHECK_VERSION = 5          # bump to invalidate cached results when checks change
 MIN_COVER_PX = 500
 BIG_PICTURE = 4 * 1024 * 1024
 HEAD_READ = 64 * 1024
@@ -305,50 +305,141 @@ def _check_tail(r, audio_off, size, si, issues):
     Find the last audio frame and verify it with its CRC-16. A frame has no
     length field, so the last frame must run exactly to the end of the file:
     a file cut short (or with a damaged end) fails that check. Cost: one small
-    read and one CRC over the last frame or two.
+    read and one CRC over the last frame or two; only when that fails, a
+    second look with a 512 KB window (STREAMINFO's maximum frame size is
+    sometimes wrong) before anything is reported.
     """
     total, rate = si['total_samples'], si['sample_rate']
     tail_len = max(16 * 1024, si['max_framesize'] * 2 + 64) if si['max_framesize'] else TAIL_READ
+    tags_noted = set()
     while True:
         n = min(tail_len, size - audio_off)
         buf = r.read_at(size - n, n)
         # tags some tools append after the audio
         if len(buf) >= 128 and buf[-128:-125] == b'TAG':
             buf = buf[:-128]
-            issues.append(_issue('warn', 'id3v1', 'ID3v1 tag at the end of the FLAC file'))
+            tags_noted.add('id3v1')
         if len(buf) >= 32 and buf[-32:-24] == b'APETAGEX':
             ape_size = int.from_bytes(buf[-20:-16], 'little') + 32
             buf = buf[:max(0, len(buf) - ape_size)]
-            issues.append(_issue('warn', 'ape', 'APE tag at the end of the FLAC file'))
+            tags_noted.add('ape')
+        verdict, padded = _last_frame(buf, si, total, rate)
+        if verdict is None or n >= size - audio_off or tail_len >= TAIL_READ_MAX:
+            break
+        tail_len = TAIL_READ_MAX          # look further back once before reporting anything
+    if 'id3v1' in tags_noted:
+        issues.append(_issue('warn', 'id3v1', 'ID3v1 tag at the end of the FLAC file'))
+    if 'ape' in tags_noted:
+        issues.append(_issue('warn', 'ape', 'APE tag at the end of the FLAC file'))
+    if verdict is None and padded:
+        issues.append(_issue('info', 'trailing_zeros', f'{padded:,} zero bytes after the last audio frame (harmless)'))
+    if verdict is not None and verdict['code'] == 'damaged_end':
+        # Before calling a file damaged: walk every frame of the last 2 MB and
+        # check each one's CRC-16 (only for the rare file that failed above).
+        n = min(CONFIRM_READ, size - audio_off)
+        buf = r.read_at(size - n, n)
+        if len(buf) >= 128 and buf[-128:-125] == b'TAG':
+            buf = buf[:-128]
+        if len(buf) >= 32 and buf[-32:-24] == b'APETAGEX':
+            buf = buf[:max(0, len(buf) - int.from_bytes(buf[-20:-16], 'little') - 32)]
+        ok, where = walk_frames(buf.rstrip(b'\0'), si)
+        if ok:
+            return None
+        if where is not None:
+            verdict = _issue('error', 'damaged_end', f'The audio is damaged near the end (a frame at about '
+                             f'{_fmt_time(where, rate)} fails its checksum)')
+    return verdict
 
-        # valid frame headers (sync + CRC-8), last ones first
-        headers, pos = [], len(buf)
-        while len(headers) < 3:
-            pos = max(buf.rfind(b'\xff\xf8', 0, pos), buf.rfind(b'\xff\xf9', 0, pos))
+CONFIRM_READ = 2 * 1024 * 1024
+
+def walk_frames(buf, si):
+    """
+    Verify every frame in buf, whose end is the end of the audio: start at the
+    first header that begins a chain of CRC-16-valid frames, then follow frame
+    after frame to the end. -> (True, None) if every frame checks out to the
+    end; (False, sample number of the first bad frame) otherwise; (False, None)
+    if no valid frame was found at all.
+    """
+    cand = []
+    pos = 0
+    while True:
+        a, b = buf.find(b'\xff\xf8', pos), buf.find(b'\xff\xf9', pos)
+        q = min(x for x in (a, b, len(buf)) if x >= 0)
+        if q >= len(buf):
+            break
+        h = parse_frame_header(buf, q, si)
+        if h:
+            cand.append((q, h[1], h[0]))
+        pos = q + 1
+    starts = set(c[0] for c in cand)
+    t = _CRC16
+
+    def frame_end(p):
+        """End of the CRC-valid frame starting at p (next header or end of buf), or None."""
+        c = 0
+        n = len(buf)
+        for j in range(p, n - 2):
+            c = ((c << 8) & 0xFFFF) ^ t[(c >> 8) ^ buf[j]]
+            k = j + 3          # a frame [p, k) whose last 2 bytes are buf[j+1:j+3]
+            if (k in starts or k == n) and c == (buf[j + 1] << 8 | buf[j + 2]):
+                return k
+        return None
+
+    i = 0
+    while i < len(cand) and i < 64:     # find a real frame to start from
+        p = cand[i][0]
+        e = frame_end(p)
+        if e is not None and (e == len(buf) or frame_end(e) is not None):
+            break
+        i += 1
+    else:
+        return False, None
+    by_pos = {c[0]: c for c in cand}
+    while True:
+        e = frame_end(p)
+        if e is None:
+            return False, by_pos[p][2] - 1 if p in by_pos else None
+        if e == len(buf):
+            return True, None
+        p = e
+
+def _last_frame(buf, si, total, rate):
+    """
+    -> (issue or None, zero bytes skipped). Tries the end of the buffer as is,
+    then without trailing zero padding (some tools pad files).
+    """
+    stripped = buf.rstrip(b'\0')
+    pad = len(buf) - len(stripped)
+    attempts = [(buf, 0)] + ([(stripped, pad)] if pad else [])
+    first_issue = None
+    for b, padded in attempts:
+        headers, pos = [], len(b)
+        while len(headers) < 8:           # valid frame headers (sync + CRC-8), last ones first
+            pos = max(b.rfind(b'\xff\xf8', 0, pos), b.rfind(b'\xff\xf9', 0, pos))
             if pos < 0:
                 break
-            h = parse_frame_header(buf, pos, si)
+            h = parse_frame_header(b, pos, si)
             if h:
                 headers.append((pos, h[0]))
-        if headers or n >= size - audio_off or tail_len >= TAIL_READ_MAX:
-            break
-        tail_len = TAIL_READ_MAX          # frames bigger than expected: look further back once
-
-    if not headers:
-        return _issue('error', 'damaged_end', 'No complete audio frame found at the end of the file')
-    for pos, end_sample in headers:       # normally the very first one is the real last frame
-        frame = buf[pos:]
-        if len(frame) > 2 and crc16(frame[:-2]) == int.from_bytes(frame[-2:], 'big'):
-            if total and end_sample < total:
-                return _issue('error', 'truncated', f'File is cut off: audio stops at '
-                              f'{_fmt_time(end_sample, rate)} of {_fmt_time(total, rate)}')
-            return None
-    end_sample = headers[0][1]
-    if total and end_sample < total:
-        return _issue('error', 'truncated', f'File is cut off: audio stops at about '
-                      f'{_fmt_time(end_sample, rate)} of {_fmt_time(total, rate)}')
-    return _issue('error', 'damaged_end', 'The end of the file is damaged (last audio frame is incomplete)')
-
+        if not headers:
+            first_issue = first_issue or _issue('error', 'damaged_end', 'No complete audio frame found at the end of the file')
+            continue
+        for pos, end_sample in headers:   # normally the very first one is the real last frame
+            frame = b[pos:]
+            if len(frame) > 2 and crc16(frame[:-2]) == int.from_bytes(frame[-2:], 'big'):
+                if total and end_sample < total:
+                    return _issue('error', 'truncated', f'File is cut off: audio stops at '
+                                  f'{_fmt_time(end_sample, rate)} of {_fmt_time(total, rate)}'), padded
+                return None, padded
+        end_sample = headers[0][1]
+        if total and end_sample < total:
+            first_issue = first_issue or _issue('error', 'truncated', f'File is cut off: audio stops at about '
+                                                f'{_fmt_time(end_sample, rate)} of {_fmt_time(total, rate)}')
+        else:
+            first_issue = first_issue or _issue(
+                'error', 'damaged_end', 'The end of the file is damaged (last audio frame fails its checksum) — '
+                'confirm with "also decode every file completely" or `flac -t`')
+    return first_issue, 0
 
 # ── Other formats ─────────────────────────────────────────────────────────────
 

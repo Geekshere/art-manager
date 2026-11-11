@@ -335,7 +335,15 @@ reintroduce a server-side "re-check" pass.
     `_fix_child_env()` restores the original value.
 15. **Defaults stored in `cfg` hide old files' versions:** `load_cfg()` marks a
     settings file without `settings_version` as version 1 before migrating.
-16. **mutagen VCommentDict setters are case-insensitive** — write tags through
+16. **Companion fields are not duplicates.** Picard/Lidarr write TOTALTRACKS +
+    TRACKTOTAL, TOTALDISCS + DISCTOTAL, MUSICBRAINZ_ALBUMTYPE + RELEASETYPE,
+    MUSICBRAINZ_ALBUMSTATUS + RELEASESTATUS on purpose (`tags.COMPANIONS`):
+    own canonical names, only a differing value is reported, `write()` keeps
+    them in step. Merging them flagged ~95% of a real Lidarr library.
+16b. **damaged_end is confirmed before it is reported:** `walk_frames()`
+    CRC-checks every frame of the last 2 MB (pure Python, ~0.5 s per flagged
+    file) and clears the error if the chain reaches EOF.
+16c. **mutagen VCommentDict setters are case-insensitive** — write tags through
     the raw list (see Tags) or you lose spellings you meant to keep.
 17. **`list.index()` on dicts compares by value** — two identical tracks got the
     same slot in track pairing; count positions instead.

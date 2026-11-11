@@ -143,3 +143,9 @@ def test_check_converts_png_named_jpg(client, tmp_path, noise_flac, monkeypatch)
     assert rep['converted_covers'] == 1
     assert Image.open(root / 'Band' / 'Album' / 'cover.jpg').format == 'JPEG'
     assert 'cover_not_jpeg' not in [i['code'] for a in rep['albums'] for f in a['files'] for i in f['issues']]
+
+def test_zero_padding_after_the_audio_is_not_damage(tmp_path, noise_flac):
+    p = tagged(tmp_path / 'pad.flac', noise_flac)
+    p.write_bytes(p.read_bytes() + b'\0' * 4096)
+    res = check.check_file(str(p))
+    assert not [i for i in res['issues'] if i['level'] != 'info']

@@ -7,7 +7,7 @@ from art_manager import tags, config
 def test_canonical_names():
     for k in ('album_artist', 'ALBUM ARTIST', 'AlbumArtist', 'album-artist', 'ALBUMARTIST'):
         assert tags.canonical(k) == 'ALBUMARTIST'
-    assert tags.canonical('totaltracks') == 'TRACKTOTAL' and tags.canonical('YEAR') == 'DATE'
+    assert tags.canonical('totaltracks') == 'TOTALTRACKS' and tags.canonical('YEAR') == 'DATE'   # companion: own field
     assert tags.canonical('MusicBrainz Album Id') == 'MUSICBRAINZ_ALBUMID'
     assert tags.canonical('my_custom_field') == 'MY_CUSTOM_FIELD'
 
@@ -69,3 +69,36 @@ def test_mojibake_repaired_by_cleanup():
     assert tags.fix_mojibake('Björk') == 'Björk'                 # fine text untouched
     out, notes = tags.normalize([('TITLE', 'BeyoncÃ©')])
     assert out == {'TITLE': ['Beyoncé']} and any('repaired' in n for n in notes)
+
+
+LIDARR = [('TRACKTOTAL', '12'), ('TOTALTRACKS', '12'), ('DISCTOTAL', '1'), ('TOTALDISCS', '1'),
+          ('RELEASETYPE', 'album'), ('MUSICBRAINZ_ALBUMTYPE', 'album'),
+          ('RELEASESTATUS', 'official'), ('MUSICBRAINZ_ALBUMSTATUS', 'official'),
+          ('TITLE', 'Song'), ('ARTIST', 'Band'), ('ALBUM', 'Album'), ('TRACKNUMBER', '1')]
+
+def test_lidarr_picard_companion_fields_are_not_problems():
+    assert tags.tag_problems(LIDARR) == []
+    clean, notes = tags.normalize(LIDARR)
+    assert clean['TOTALTRACKS'] == ['12'] and clean['MUSICBRAINZ_ALBUMTYPE'] == ['album'] and notes == []
+
+def test_companion_that_disagrees_is_reported_and_fixed():
+    bad = [p if p[0] != 'TOTALTRACKS' else ('TOTALTRACKS', '11') for p in LIDARR]
+    assert [c for _, c, _ in tags.tag_problems(bad)] == ['companion_mismatch']
+    clean, notes = tags.normalize(bad)
+    assert clean['TOTALTRACKS'] == ['12'] and notes
+
+def test_saving_keeps_companions_in_step(tmp_path, flac_bytes=None):
+    from mutagen.flac import FLAC
+    import shutil, subprocess
+    if not shutil.which('ffmpeg'):
+        import pytest; pytest.skip('ffmpeg needed')
+    p = tmp_path / 'a.flac'
+    subprocess.run(['ffmpeg', '-loglevel', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono', '-t', '1',
+                    '-c:a', 'flac', str(p)], check=True)
+    tags.write(str(p), LIDARR)
+    new, _ = tags.normalize(tags.read_raw(str(p)))
+    new['TRACKTOTAL'] = ['13']
+    del new['RELEASETYPE']
+    tags.write(str(p), new)
+    got = dict(tags.normalize(tags.read_raw(str(p)))[0])
+    assert got['TOTALTRACKS'] == ['13'] and 'MUSICBRAINZ_ALBUMTYPE' not in got

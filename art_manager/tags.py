@@ -29,7 +29,7 @@ _CANON = [
     'ENCODER', 'ENCODEDBY', 'COPYRIGHT', 'LYRICS', 'BPM', 'MOOD', 'WEBSITE', 'GROUPING', 'SUBTITLE', 'REMIXER',
 ]
 _ALIASES = {   # other names for the same field
-    'TOTALTRACKS': 'TRACKTOTAL', 'TOTALDISCS': 'DISCTOTAL', 'DISC': 'DISCNUMBER', 'YEAR': 'DATE',
+    'DISC': 'DISCNUMBER', 'YEAR': 'DATE',
     'CATALOGUENUMBER': 'CATALOGNUMBER', 'CATALOG': 'CATALOGNUMBER', 'ALBUMARTISTS': 'ALBUMARTISTS',
     'MUSICBRAINZRECORDINGID': 'MUSICBRAINZ_TRACKID', 'MUSICBRAINZRELEASEID': 'MUSICBRAINZ_ALBUMID',
     'ACOUSTIDID': 'ACOUSTID_ID', 'TRACK': 'TRACKNUMBER',
@@ -37,6 +37,14 @@ _ALIASES = {   # other names for the same field
     'MUSICBRAINZALBUMTYPE': 'RELEASETYPE', 'MUSICBRAINZALBUMSTATUS': 'RELEASESTATUS',
     'MUSICBRAINZALBUMRELEASECOUNTRY': 'RELEASECOUNTRY',
 }
+# Fields that Picard / Lidarr deliberately write under a second name as well,
+# with the same value, because different players read different names. They
+# are kept as their own fields (never merged away); only a *different* value
+# is a problem, and saving keeps them in step with the main field.
+COMPANIONS = {'TOTALTRACKS': 'TRACKTOTAL', 'TOTALDISCS': 'DISCTOTAL', 'MUSICBRAINZ_ALBUMTYPE': 'RELEASETYPE',
+              'MUSICBRAINZ_ALBUMSTATUS': 'RELEASESTATUS', 'MUSICBRAINZ_ALBUMRELEASECOUNTRY': 'RELEASECOUNTRY'}
+_COMP_SQUASH = {re.sub(r'[\s_\-]', '', c): c for c in COMPANIONS}
+
 _SQUASH = {re.sub(r'[\s_\-]', '', c): c for c in _CANON}
 _SQUASH.update(_ALIASES)
 
@@ -48,7 +56,9 @@ SINGLE = {'TITLE', 'ALBUM', 'ALBUMARTIST', 'TRACKNUMBER', 'TRACKTOTAL', 'DISCNUM
 
 FRIENDLY = {'ALBUMARTIST': 'Album artist', 'TRACKNUMBER': 'Track number', 'TRACKTOTAL': 'Track total',
             'DISCNUMBER': 'Disc number', 'DISCTOTAL': 'Disc total', 'CATALOGNUMBER': 'Catalog number',
-            'ORIGINALDATE': 'Original date', 'MUSICBRAINZ_ALBUMCOMMENT': 'Edition / version'}
+            'ORIGINALDATE': 'Original date', 'MUSICBRAINZ_ALBUMCOMMENT': 'Edition / version',
+            'RELEASETYPE': 'Release type', 'RELEASESTATUS': 'Release status', 'RELEASECOUNTRY': 'Release country',
+            'ALBUMARTISTSORT': 'Album artist sort', 'ARTISTSORT': 'Artist sort', 'ORIGINALYEAR': 'Original year'}
 
 
 def squash(key):
@@ -66,7 +76,8 @@ def canonical(key):
     n = native_canonical(k)
     if n is not None:
         return _SQUASH.get(squash(n)) or (n if n in _CANON else k)
-    return _SQUASH.get(squash(k)) or k.upper()
+    sq = squash(k)
+    return _COMP_SQUASH.get(sq) or _SQUASH.get(sq) or k.upper()
 
 def _is_native(key, canon=None):
     """
@@ -196,7 +207,22 @@ def normalize(pairs):
             if m.group(2) != '0':
                 out.setdefault(tot, [m.group(2)])
             notes.append(f'{friendly(num)}: "{v}" split into number and total')
+    for comp, main in COMPANIONS.items():          # TOTALTRACKS follows TRACKTOTAL, ...
+        if comp in out and main in out and [x.casefold() for x in out[comp]] != [x.casefold() for x in out[main]]:
+            notes.append(f'{comp}: "{"; ".join(out[comp])}" set to match {friendly(main).lower()} "{"; ".join(out[main])}"')
+            out[comp] = list(out[main])
     return out, list(dict.fromkeys(notes))
+
+def sync_companions(tagdict):
+    """Before writing: TOTALTRACKS etc. take the main field's value, or go when it is removed."""
+    out = dict(tagdict)
+    for comp, main in COMPANIONS.items():
+        if comp in out:
+            if out.get(main):
+                out[comp] = list(out[main])
+            else:
+                del out[comp]
+    return out
 
 def as_pairs(tagdict):
     return [(k, v) for k, vals in tagdict.items() for v in vals]
@@ -233,6 +259,12 @@ def tag_problems(pairs):
         if any(_MOJIBAKE.search(v) for _, v in items):
             bad = next(v for _, v in items if _MOJIBAKE.search(v))
             out.append(('warn', 'mojibake', f'{friendly(c)} looks garbled ("{bad[:60]}") — probably a text-encoding mix-up'))
+    for comp, main in COMPANIONS.items():
+        a = [v.strip().casefold() for _, v in groups.get(comp, []) if v.strip()]
+        b = [v.strip().casefold() for _, v in groups.get(main, []) if v.strip()]
+        if a and b and a != b:
+            out.append(('warn', 'companion_mismatch', f'{friendly(main)} is "{groups[main][0][1].strip()}" but '
+                        f'{groups[comp][0][0]} says "{groups[comp][0][1].strip()}" — players may disagree'))
     tn = [v.strip() for _, v in groups.get('TRACKNUMBER', []) if v.strip()]
     if tn and not _TRACKNUM.match(tn[0]):
         out.append(('warn', 'bad_tracknumber', f'Track number "{tn[0]}" is not a number'))
@@ -245,7 +277,8 @@ def tag_problems(pairs):
         out.append(('info', 'key_case', 'Field names are lower case (fine for most players; Clean up makes them upper case)'))
     return out
 
-CLEANUP_CODES = {'tag_spellings', 'dup_values', 'tag_whitespace', 'empty_tag', 'key_case', 'tag_conflict'}
+CLEANUP_CODES = {'tag_spellings', 'dup_values', 'tag_whitespace', 'empty_tag', 'key_case', 'tag_conflict',
+                 'companion_mismatch'}
 
 
 # ── writing, backups, undo ────────────────────────────────────────────────────
@@ -266,6 +299,8 @@ def write(path, tags):
     """
     from mutagen.flac import FLAC
     from . import formats
+    if isinstance(tags, dict):
+        tags = sync_companions(tags)
     if formats.family(path) != 'flac':
         pairs = formats.to_native(path, tags) if isinstance(tags, dict) else list(tags)
         return formats.write(path, pairs)
