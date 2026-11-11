@@ -254,7 +254,13 @@ def _mp4_pairs(tags):
             out.append((key, '1' if vals else '0'))
         elif key.startswith('----:'):
             for v in vals:
-                out.append((key, bytes(v).decode('utf-8', 'replace')))
+                fmt = getattr(v, 'dataformat', 1)
+                if fmt not in (1, 2):          # UTF-8 / UTF-16 text only; binary atoms (iTunes encoder data) stay untouched
+                    continue
+                try:
+                    out.append((key, bytes(v).decode('utf-16-be' if fmt == 2 else 'utf-8')))
+                except UnicodeDecodeError:
+                    continue
         elif key in MP4_ATOMS and isinstance(vals, list):
             out += [(key, str(v)) for v in vals]
     return out   # other atoms (stik, rtng, purd, ...) are left alone

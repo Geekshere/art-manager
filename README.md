@@ -45,10 +45,12 @@ It only ever touches artwork — never tags, genres or filenames.
   off in Settings (then Quick fixes → Tidy does it on request)
 - **Redacted first:** with an API key, Redacted's covers are searched in
   parallel with the other sources and always shown first
-- **Repair damaged ends:** FLAC and MP3 files that are cut off or have a
-  damaged last frame can be cut right after their last intact frame (the
-  header is corrected; usually well under a second is lost). Damage in the
-  middle of a file is never touched. Originals are kept and can be put back
+- **Repair damaged files:** FLAC and MP3 files that are cut off or have a
+  damaged last frame are cut right after their last intact frame (the header
+  is corrected). In FLACs, damaged frames further in are replaced by valid
+  frames of silence of the same length (typically 0.1 s) — the track plays
+  through, its length and every other sample stay exactly the same.
+  Originals are kept and can be put back
 - **Tag clean-up:** merges fields written several ways (`ALBUMARTIST`,
   `album_artist`, `ALBUM ARTIST` → one `ALBUMARTIST`), removes duplicate and
   empty values, trims spaces and repairs garbled text (`CafÃ©` → `Café`) —

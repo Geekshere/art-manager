@@ -1845,11 +1845,12 @@ function renderCheckReport(){
     const covBulk=badCov.length?'<div class="tg-box" style="margin:6px 0"><button onclick="bulkCoverConvert()">Convert '+badCov.length+' cover'+(badCov.length===1?'':'s')+'</button> '+
         '<span class="note">named <code>'+esc(CN())+'</code> but really another image type (some players and car stereos can\'t show them) — re-saved as a real '+(CN().endsWith('.png')?'PNG':'JPEG')+'.</span> <span id="bulk-cov-status" class="note"></span></div>':'';
     const broken=(r.albums||[]).flatMap(a=>a.files.filter(f=>f.kind==='track'&&/\.(flac|mp3)$/i.test(f.name)&&
-        f.issues.some(i=>i.code==='damaged_end'||i.code==='truncated')).map(f=>({path:f.path,label:a.artist+' — '+f.name})));
+        f.issues.some(i=>i.level==='error'&&(i.code==='damaged_end'||i.code==='truncated'))).map(f=>({path:f.path,label:a.artist+' — '+f.name})));
     window._brokenFiles=broken;
     const repBulk=broken.length?'<div class="tg-box" style="margin:6px 0"><button onclick="repairBroken()">Repair '+broken.length+' file'+(broken.length===1?'':'s')+' with a damaged end</button> '+
-        '<span class="note">cuts each file right after its last intact audio frame, so it ends a moment early instead of glitching or stopping. '+
-        'A file damaged in the middle is left alone. The original is kept and can be put back. Best fix is still a fresh copy from where you got it.</span>'+
+        '<span class="note">damage at the very end: the file is cut after its last intact audio frame. Damage further in: just the broken frames '+
+        '(usually a tenth of a second) are replaced by silence, so the track plays through instead of glitching or stopping. Everything else stays bit-identical. '+
+        'Originals are kept and can be put back. Best fix is still a fresh copy from where you got it.</span>'+
         '<div id="repair-status" class="note"></div></div>':'';
     out.innerHTML=bulk+covBulk+repBulk+albums.map((a,k)=>'<div class="chk-album"><div class="chk-album-hdr"><span>'+esc(a.artist)+' — '+esc(a.album)+'</span>'+
         '<button style="margin-left:auto;font-size:11px" data-tags="'+k+'">Tags…</button><button style="font-size:11px" data-open="'+k+'">Open album →</button></div>'+
@@ -1897,7 +1898,7 @@ function fileIssuesHTML(files,line){
 }
 async function repairBroken(){
     const files=window._brokenFiles||[];
-    if(!files.length||!confirm('Repair '+files.length+' file'+(files.length===1?'':'s')+'?\n\nEach is cut after its last intact audio frame (usually well under a second is lost). Originals are kept so you can undo.')) return;
+    if(!files.length||!confirm('Repair '+files.length+' file'+(files.length===1?'':'s')+'?\n\nOnly the damaged audio is changed (cut at the very end, or replaced by a moment of silence). Originals are kept so you can undo.')) return;
     const st=document.getElementById('repair-status');
     try{
         const job=await api('/api/repair',{method:'POST',body:JSON.stringify({paths:files.map(f=>f.path)})});

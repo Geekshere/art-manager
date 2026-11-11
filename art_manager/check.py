@@ -29,8 +29,9 @@ import io, os, shutil, struct, subprocess
 from . import formats, storage
 from . import tags as tagmod
 
-CHECK_VERSION = 5          # bump to invalidate cached results when checks change
-MIN_COVER_PX = 500
+CHECK_VERSION = 6          # bump to invalidate cached results when checks change
+MIN_COVER_PX = 500        # below this: info ("could be sharper")
+SMALL_COVER_PX = 350      # below this: warning
 BIG_PICTURE = 4 * 1024 * 1024
 HEAD_READ = 64 * 1024
 TAIL_READ = 64 * 1024
@@ -472,12 +473,17 @@ def mpeg_frame_len(buf, p):
 
 def _strip_end_tags(buf):
     """Remove ID3v1 / APEv2 / Lyrics3 tags from the end of a tail buffer."""
-    for _ in range(3):
+    for _ in range(5):
         if len(buf) >= 128 and buf[-128:-125] == b'TAG':
             buf = buf[:-128]
         elif len(buf) >= 32 and buf[-32:-24] == b'APETAGEX':
             ape = int.from_bytes(buf[-20:-16], 'little') + 32
             buf = buf[:max(0, len(buf) - ape)]
+        elif len(buf) >= 10 and buf[-10:-7] == b'3DI':          # ID3v2 tag with a footer, at the end
+            sz = buf[-4:]
+            buf = buf[:max(0, len(buf) - 20 - ((sz[0] << 21) | (sz[1] << 14) | (sz[2] << 7) | sz[3]))]
+        elif buf.endswith(b'\0' * 16):
+            buf = buf.rstrip(b'\0')
         elif len(buf) >= 15 and buf[-9:] == b'LYRICS200':
             try:
                 buf = buf[:max(0, len(buf) - 15 - int(buf[-15:-9]))]
@@ -511,7 +517,8 @@ def _mp3_end(f, size):
             if pos == len(buf):
                 return None
         if len(buf) - pos > 2048:
-            return _issue('warn', 'damaged_end', f'{len(buf) - pos} bytes of unknown data after the audio')
+            return _issue('info', 'trailing_data', f'{len(buf) - pos:,} bytes of other data after the audio '
+                          '(usually a tag some programs add; harmless)')
         return None
     return None    # couldn't find frames (very short file): no verdict
 
@@ -547,7 +554,7 @@ def _ogg_end(f, size):
         if _ogg_crc(page) != crc:
             continue          # 'OggS' inside audio data, or a damaged page: look further back
         if end < len(buf):
-            return _issue('warn', 'damaged_end', f'{len(buf) - end} bytes of unknown data after the audio')
+            return _issue('info', 'trailing_data', f'{len(buf) - end:,} bytes of other data after the audio (harmless)')
         if not buf[p + 5] & 4:
             return _issue('warn', 'no_eos', 'The stream has no end marker (file may be cut off)')
         return None
@@ -727,7 +734,8 @@ def check_cover(path):
     if fmt != want:
         out.append(_issue('warn', 'cover_not_jpeg', f'{storage.basename(path)} is really a {fmt} file'))
     if min(w, h) < MIN_COVER_PX:
-        out.append(_issue('warn', 'small_cover', f'{storage.basename(path)} is only {w}×{h} px'))
+        out.append(_issue('warn' if min(w, h) < SMALL_COVER_PX else 'info', 'small_cover',
+                          f'{storage.basename(path)} is only {w}×{h} px'))
     return out
 
 

@@ -7,7 +7,8 @@ from art_manager import tags, config
 def test_canonical_names():
     for k in ('album_artist', 'ALBUM ARTIST', 'AlbumArtist', 'album-artist', 'ALBUMARTIST'):
         assert tags.canonical(k) == 'ALBUMARTIST'
-    assert tags.canonical('totaltracks') == 'TOTALTRACKS' and tags.canonical('YEAR') == 'DATE'   # companion: own field
+    assert tags.canonical('totaltracks') == 'TOTALTRACKS' and tags.canonical('YEAR') == 'YEAR'   # companions: own fields
+    assert tags.canonical('Year') == 'DATE'          # APEv2's date field
     assert tags.canonical('MusicBrainz Album Id') == 'MUSICBRAINZ_ALBUMID'
     assert tags.canonical('my_custom_field') == 'MY_CUSTOM_FIELD'
 
@@ -23,8 +24,23 @@ def test_normalize_merges_variants_and_duplicates():
 def test_canonical_spelling_wins_conflicts():
     out, _ = tags.normalize([('album_artist', 'Wrong'), ('ALBUMARTIST', 'Right')])
     assert out == {'ALBUMARTIST': ['Right']}
-    out, _ = tags.normalize([('YEAR', '1994'), ('DATE', '1994-10-17')])
-    assert out == {'DATE': ['1994-10-17']}
+    out, _ = tags.normalize([('YEAR', '1994'), ('DATE', '1994-10-17')])     # YEAR kept, agrees with DATE
+    assert out == {'YEAR': ['1994'], 'DATE': ['1994-10-17']}
+    out, _ = tags.normalize([('YEAR', '2010'), ('DATE', '2001-03-27')])     # YEAR follows DATE
+    assert out == {'YEAR': ['2001'], 'DATE': ['2001-03-27']}
+
+def test_real_library_cases():
+    P = tags.tag_problems
+    assert [c for l, c, _ in P([('ALBUM ARTIST', 'X'), ('ALBUMARTIST', 'X')])] == ['tag_spellings']
+    assert [l for l, c, _ in P([('ALBUM ARTIST', 'X'), ('ALBUMARTIST', 'X')])] == ['info']
+    assert P([('DATE', '2026-06-12'), ('YEAR', '2026')]) == []
+    assert P([('ALBUMARTIST', 'Chrystabell'), ('ALBUMARTIST', 'David Lynch')]) == []      # two album artists
+    assert P([('CATALOGNUMBER', '7243 8 59895 2 0'), ('CATALOGNUMBER', 'CDEMD 1117')]) == []
+    assert P([('DATE', '2024'), ('DATE', '2024-05-14')]) == []
+    assert P([('RELEASETYPE', 'album'), ('MUSICBRAINZ ALBUM TYPE', 'Album'), ('MUSICBRAINZ_ALBUMTYPE', 'album')])[0][0] == 'info'
+    assert [c for _, c, _ in P([('MUSICBRAINZ ALBUM ID', 'a'), ('MUSICBRAINZ_ALBUMID', 'b')])] == ['tag_conflict']
+    assert [c for _, c, _ in P([('DATE', '2001-03-27'), ('YEAR', '2010')])] == ['companion_mismatch']
+    assert [l for l, _, _ in P([('ENCODER', 'x'), ('ENCODER', 'x')])] == ['info']
 
 def test_problem_detection():
     codes = {c for _, c, _ in tags.tag_problems([

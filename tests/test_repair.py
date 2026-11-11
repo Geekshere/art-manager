@@ -39,14 +39,31 @@ def test_flac_end_repaired(tmp_path, noise, how):
     repair.undo(r['backup'])                       # undo gives back the exact original
     assert errors(p)
 
-def test_damage_in_the_middle_is_left_alone(tmp_path, noise):
+def test_damage_in_the_middle_is_bridged_with_silence(tmp_path, noise):
+    import wave
     data = noise['flac']
     p = tmp_path / 'm.flac'
-    bad = flipped(data, len(data) // 2)
-    p.write_bytes(bad)
+    p.write_bytes(flipped(data, len(data) // 2))
     r = repair.repair(str(p))
-    assert r['status'] == 'skipped' and 'not at the very end' in r['message']
-    assert p.read_bytes() == bad
+    assert r['status'] == 'repaired' and 'silence' in r['message'], r
+    assert errors(p) == [] and 0 < r['seconds'] < 0.5
+    if shutil.which('flac'):
+        assert subprocess.run(['flac', '-t', '-s', str(p)], capture_output=True).returncode == 0
+        good = tmp_path / 'good.flac'; good.write_bytes(data)
+        for f in (good, p):
+            subprocess.run(['flac', '-f', '-s', '-d', '-o', str(f) + '.wav', str(f)], check=True)
+        a = wave.open(str(good) + '.wav').readframes(10 ** 9)
+        b = wave.open(str(p) + '.wav').readframes(10 ** 9)
+        assert len(a) == len(b)                                   # same length
+        changed = sum(1 for k in range(0, len(a), 4096) if a[k:k + 4096] != b[k:k + 4096])
+        assert 0 < changed * 4096 < len(a) // 10                  # only a small stretch differs
+
+def test_silent_frame_is_valid():
+    t = {'variable': 0, 'bs_code': 12, 'sr_code': 9, 'b3': 0x18 | (8 << 4) & 0xF0, 'bs': 4096, 'sr_extra': b''}
+    t['b3'] = (8 << 4) | (4 << 1)                                 # left/side stereo, 16-bit
+    f = repair.silent_frame(t, 5, 4096, {'bits': 16, 'max_blocksize': 4096})
+    assert check.parse_frame_header(f, 0, {'max_blocksize': 4096})[0] == 6 * 4096
+    assert check.crc16(f[:-2]) == int.from_bytes(f[-2:], 'big')
 
 def test_intact_file_is_not_touched(tmp_path, noise):
     p = tmp_path / 'ok.flac'
