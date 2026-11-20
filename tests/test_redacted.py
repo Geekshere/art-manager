@@ -55,6 +55,35 @@ def test_album_covers_and_group_fallback(api):
     assert browse['headers']['Authorization'] == 'KEY123' and 'ArtManager' in browse['headers']['User-Agent']
     assert [c['params']['action'] for c in api['calls']] == ['browse', 'torrentgroup']   # one lookup, only where needed
 
+def test_folder_names_are_cleaned_for_the_search(api):
+    redacted.album_covers('Benn Jordan', 'Pale Blue Dot - A Tribute to Carl Sagan (2008)')
+    assert api['calls'][0]['params'] == {'action': 'browse', 'groupname': 'Pale Blue Dot A Tribute to Carl Sagan',
+                                         'artistname': 'Benn Jordan'}
+    assert redacted._words('Album [FLAC 24-96] (2013)') == 'Album'
+    assert redacted._words('桜の木の下 (2000)') == '桜の木の下'
+
+def test_falls_back_to_album_only_then_plain_search(api):
+    seen = []
+    def browse(p):
+        seen.append({k: v for k, v in p.items() if k != 'action'})
+        hit = 'searchstr' in p
+        return FakeResp(data={'status': 'success', 'response': {'results': [
+            {'groupId': 7, 'groupName': 'Back in Black', 'artist': 'AC/DC', 'groupYear': 1980,
+             'cover': 'https://ptpimg.me/x.jpg'}] if hit else []}})
+    api['script']['browse'] = browse
+    out = redacted.album_covers('AC+DC', 'Back in Black (1980)')
+    assert seen == [{'groupname': 'Back in Black', 'artistname': 'AC DC'}, {'groupname': 'Back in Black'},
+                    {'searchstr': 'AC DC Back in Black'}]
+    assert out and out[0]['label'] == 'AC/DC — Back in Black (1980)'
+
+def test_best_match_first(api):
+    api['script']['browse'] = lambda p: FakeResp(data={'status': 'success', 'response': {'results': [
+        {'groupId': 1, 'groupName': 'Dummy (Live)', 'artist': 'Portishead', 'groupYear': 1998, 'cover': 'https://a/1.jpg'},
+        {'groupId': 2, 'groupName': 'Dummy', 'artist': 'Portishead', 'groupYear': 1994, 'cover': 'https://a/2.jpg'},
+        {'groupId': 3, 'groupName': 'Dummy &amp; More', 'artist': 'Someone', 'groupYear': 2000, 'cover': 'https://a/3.jpg'}]}})
+    out = redacted.album_covers('Portishead', 'Dummy (1994)')
+    assert [o['url'] for o in out][0] == 'https://a/2.jpg' and 'Dummy & More' in out[-1]['label']
+
 def test_group_lookups_are_capped(api):
     api['script']['browse'] = lambda p: FakeResp(data={'status': 'success', 'response': {'results': [
         {'groupId': i, 'groupName': f'G{i}', 'artist': 'A'} for i in range(6)]}})
