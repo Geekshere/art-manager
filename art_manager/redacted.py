@@ -15,7 +15,7 @@ Rules from Redacted's API documentation, followed strictly:
   /api/image/redacted?path=i/<id>.<ext>, and fetched here with the
   credentials added.
 """
-import collections, re, threading, time
+import collections, difflib, re, threading, time
 from urllib.parse import quote
 
 import requests
@@ -143,13 +143,60 @@ def fetch_site_image(path):
 
 # ── search providers ──────────────────────────────────────────────────────────
 
+_YEAR = re.compile(r'\s*[\(\[](\d{4})[\)\]]\s*$')
+_FORMAT = re.compile(r'\s*[\(\[](?:flac|mp3|web|cd|vinyl|lossless|24[ -]?bit|16[ -]?bit|\d{2}[-/ ]\d{2,3}(?:\.\d)?|'
+                     r'\d{2,3}(?:\.\d)?\s*khz|v0|v2|320)[^\)\]]*[\)\]]', re.I)
+
+def _words(s):
+    """
+    Folder name -> search words. Redacted's search matches whole words, so
+    'Pale Blue Dot - A Tribute to Carl Sagan (2008)' finds nothing until the
+    year and the punctuation are gone ('-' and '!' even act as NOT there).
+    """
+    s = _YEAR.sub('', s or '')
+    s = _FORMAT.sub('', s)
+    s = re.sub(r"[^\w]+", ' ', s)          # letters and digits of any script stay
+    return ' '.join(s.split())
+
+def folder_year(album):
+    m = _YEAR.search(album or '')
+    return int(m.group(1)) if m else None
+
+def _norm(s):
+    return _words(_unescape(s)).casefold()
+
+def find_groups(artist, album):
+    """
+    Release groups for an album folder, best match first. Tries, until one
+    gives results: album + artist, album only (the artist may be spelled
+    differently, e.g. 'AC+DC' for AC/DC, or 'Various Artists'), then one
+    plain search over both.
+    """
+    al, ar = _words(album), _words(artist)
+    if not al:
+        return []
+    attempts = []
+    if ar and ar.casefold() not in ('various artists', 'various'):
+        attempts.append({'groupname': al, 'artistname': ar})
+    attempts.append({'groupname': al})
+    if ar:
+        attempts.append({'searchstr': f'{ar} {al}'})
+    res = []
+    for params in attempts:
+        res = (_get('browse', **params) or {}).get('results', []) or []
+        if res:
+            break
+    year, want_al, want_ar = folder_year(album), al.casefold(), ar.casefold()
+    def rank(g):
+        name, art = _norm(g.get('groupName')), _norm(g.get('artist'))
+        return (name != want_al, not want_ar or art != want_ar, not (year and g.get('groupYear') == year),
+                -difflib.SequenceMatcher(None, name, want_al).ratio())
+    return sorted(res, key=rank)
+
 def album_covers(artist, album, page=0):
     if page or not enabled():
         return []
-    params = {'groupname': album}
-    if artist:
-        params['artistname'] = artist
-    res = (_get('browse', **params) or {}).get('results', [])[:6]
+    res = find_groups(artist, album)[:6]
     out, lookups = [], 0
     for g in res:
         img = g.get('cover') or g.get('wikiImage')
@@ -165,7 +212,7 @@ def album_covers(artist, album, page=0):
         year = f" ({g['groupYear']})" if g.get('groupYear') else ''
         kind = f" · {g['releaseType']}" if isinstance(g.get('releaseType'), str) else ''
         out.append({'url': urls[0], 'thumb': urls[1], 'source': 'Redacted', 'quality': '',
-                    'label': f"{g.get('artist', artist)} — {g.get('groupName', '')}{year}{kind}"})
+                    'label': f"{_unescape(g.get('artist')) or artist} — {_unescape(g.get('groupName'))}{year}{kind}"})
     return out
 
 def artist_image(name, page=0):
@@ -191,11 +238,8 @@ def _unescape(s):
 
 def search_groups(artist, album):
     """Release groups matching an album, for the tag editor."""
-    params = {'groupname': album}
-    if artist:
-        params['artistname'] = artist
     out = []
-    for g in (_get('browse', **params) or {}).get('results', [])[:10]:
+    for g in find_groups(artist, album)[:10]:
         rt = g.get('releaseType')
         out.append({'id': g.get('groupId'), 'title': _unescape(g.get('groupName')), 'artist': _unescape(g.get('artist')),
                     'year': g.get('groupYear'), 'type': RELEASE_TYPES.get(rt, rt) if isinstance(rt, int) else (rt or ''),
